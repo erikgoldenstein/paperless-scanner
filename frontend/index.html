@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Paperless Scanner</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="thumbnail-strip" aria-label="Document tabs">
+        <div id="document-groups" class="document-groups"></div>
+      </section>
+
+      <div class="workspace">
+        <section class="preview-panel">
+          <div id="status" class="status" role="status"></div>
+          <div id="zoom-controls" class="zoom-controls" aria-label="Preview zoom">
+            <button id="zoom-out" class="zoom-button" type="button" aria-label="Zoom out" title="Zoom out">−</button>
+            <span id="zoom-level" aria-live="polite">100%</span>
+            <button id="zoom-in" class="zoom-button" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+          </div>
+          <button id="rotate-preview" class="rotate-preview" type="button" aria-label="Rotate current page 90 degrees" title="Rotate 90°">↻</button>
+          <div id="preview" class="preview-empty">
+            <span>Your current page will appear here</span>
+          </div>
+        </section>
+
+        <nav id="actions" class="actions" aria-label="Document actions">
+          <button id="add-page" class="action add" type="button">Add page</button>
+          <button id="rescan" class="action rescan" type="button">Rescan</button>
+          <button id="upload" class="action upload" type="button">Upload</button>
+          <button id="reset" class="action reset" type="button">Reset</button>
+          <button id="settings-button" class="action settings" type="button">Settings</button>
+        </nav>
+
+        <section id="upload-status" class="upload-status idle" aria-live="polite">
+          <button id="upload-indicator" class="upload-indicator" type="button" aria-label="Upload status"></button>
+          <div id="upload-progress" class="upload-progress" role="progressbar" aria-label="Document upload progress" aria-busy="true">
+            <div id="upload-progress-bar" class="upload-progress-bar active"></div>
+          </div>
+          <span id="upload-status-text"></span>
+        </section>
+      </div>
+    </main>
+
+    <div id="settings-dialog" class="dialog" role="dialog" aria-modal="true" aria-hidden="true" hidden>
+      <form id="settings-form">
+        <div class="dialog-header">
+          <h2>Settings</h2>
+          <button class="close-button" type="button" aria-label="Close">×</button>
+        </div>
+
+        <label>
+          Scanner
+          <select id="scanner-device">
+            <option value="">Default scanner</option>
+          </select>
+        </label>
+        <button id="refresh-scanners" class="secondary-button" type="button">Refresh scanners</button>
+        <p id="scanner-status" class="scanner-status" role="status"></p>
+
+        <label>
+          Resolution
+          <select id="scanner-resolution">
+            <option value="150">150 dpi</option>
+            <option value="300">300 dpi</option>
+            <option value="600">600 dpi</option>
+          </select>
+        </label>
+
+        <label>
+          Mode
+          <select id="scanner-mode">
+            <option value="Color">Color</option>
+            <option value="Gray">Grayscale</option>
+            <option value="Lineart">Black and white</option>
+          </select>
+        </label>
+
+        <label>
+          PDF compression quality
+          <input id="compression" type="range" min="40" max="95" step="5" value="85" />
+          <output id="compression-value" for="compression">85%</output>
+        </label>
+
+        <label>
+          PDF image format
+          <select id="compression-format">
+            <option value="jpeg">JPEG (best compatibility)</option>
+            <option value="jpeg2000">JPEG 2000 (smaller, less compatible)</option>
+          </select>
+        </label>
+
+        <label>
+          Paper format
+          <select id="paper-format">
+            <option value="a4">A4</option>
+            <option value="us-letter">US Letter</option>
+            <option value="legal">US Legal</option>
+            <option value="a5">A5</option>
+          </select>
+        </label>
+
+        <label>
+          Maximum upload size (MB)
+          <input id="max-upload-size" type="number" min="1" max="10000" step="1" value="10" />
+        </label>
+
+        <label class="checkbox-label">
+          <input id="simple-mode" type="checkbox" />
+          Simple mode (one document, no tab switching)
+        </label>
+
+        <label class="checkbox-label">
+          <input id="ask-for-filename" type="checkbox" checked />
+          Ask for a filename before upload
+        </label>
+
+        <label class="checkbox-label">
+          <input id="hash-file-naming" type="checkbox" checked />
+          Use hash-based filenames when no custom name is given
+        </label>
+
+        <label class="checkbox-label">
+          <input id="debug-history" type="checkbox" />
+          Show debug details in state history
+        </label>
+
+        <label>
+          Paperless URL
+          <input id="paperless-url" type="url" placeholder="https://paperless.example" />
+        </label>
+
+        <label>
+          API token
+          <input id="paperless-token" type="password" autocomplete="off" />
+        </label>
+
+        <div class="dialog-actions">
+          <button id="save-settings" class="primary-button" value="default" type="submit">Save settings</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="upload-dialog" class="dialog" role="dialog" aria-modal="true" aria-hidden="true" hidden>
+      <form id="upload-form">
+        <div class="dialog-header">
+          <h2>Upload document</h2>
+          <button class="close-button" type="button" aria-label="Close">×</button>
+        </div>
+        <label>
+          Filename / title (optional)
+          <input id="upload-title" type="text" autocomplete="off" placeholder="e.g. electricity-bill-2026-08" />
+        </label>
+        <p class="dialog-hint">Press Enter to upload, or leave it empty to let Paperless choose.</p>
+        <div class="dialog-actions">
+          <button id="cancel-upload" class="secondary-button" type="button">Cancel</button>
+          <button class="primary-button" value="default" type="submit">Upload</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="confirm-dialog" class="dialog" role="dialog" aria-modal="true" aria-hidden="true" hidden>
+      <form id="confirm-form">
+        <div class="dialog-header">
+          <h2 id="confirm-title">Confirm action</h2>
+        </div>
+        <p id="confirm-message"></p>
+        <div class="dialog-actions confirm-actions">
+          <button id="cancel-confirm" class="secondary-button" type="button">Cancel</button>
+          <button id="confirm-action" class="primary-button" value="default" type="submit">Continue</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="status-dialog" class="dialog" role="dialog" aria-modal="true" aria-hidden="true" hidden>
+      <form id="status-form">
+        <div class="dialog-header">
+          <h2>Document state history</h2>
+          <button class="close-button" type="button" aria-label="Close">×</button>
+        </div>
+        <div id="status-history-list"></div>
+      </form>
+    </div>
+
+    <script src="upload-state.js"></script>
+    <script src="document-state.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

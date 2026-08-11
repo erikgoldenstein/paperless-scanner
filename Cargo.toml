@@ -1,0 +1,56 @@
+[package]
+name = "paperless-scanner"
+version = "0.1.0"
+description = "A small desktop scanner client for Paperless-ngx"
+authors = ["Paperless Scanner contributors"]
+edition = "2021"
+
+[lib]
+name = "paperless_scanner_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "paperless-scanner"
+path = "src/main.rs"
+
+[features]
+default = []
+jpeg-turbo = ["dep:turbojpeg"]
+openjph-experiment = ["dep:openjph-core"]
+gui = ["dep:tauri", "dep:tauri-build", "jpeg-turbo"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [], optional = true }
+
+[dependencies]
+base64 = "0.22"
+image = "0.24"
+lopdf = "0.31"
+openjpeg-sys = { version = "1.0.10", features = ["threads"] }
+openjph-core = { version = "0.1", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [], optional = true }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+turbojpeg = { version = "1.4", default-features = false, features = ["cmake", "image"], optional = true }
+
+[[bench]]
+name = "jpeg_encoding"
+harness = false
+required-features = ["jpeg-turbo"]
+
+[[bench]]
+name = "jpeg2000_encoding"
+harness = false
+required-features = ["openjph-experiment"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
+[workspace]
+resolver = "2"
