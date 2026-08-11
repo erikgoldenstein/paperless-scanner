@@ -512,6 +512,23 @@ test("simple mode can be enabled from Settings", async ({ page }) => {
   await expect(page.locator(".document-group-header")).toHaveCount(0);
 });
 
+test("theme setting supports light and dark modes and follows the system theme", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await openApp(page);
+
+  await expect.poll(async () => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(async () => page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
+
+  await page.locator("#settings-button").click();
+  await page.locator("#theme").selectOption("dark");
+  await page.locator("#save-settings").click();
+
+  await expect.poll(async () => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+  const save = await page.evaluate(() => window.__testCalls.find(({ command }) => command === "save_settings"));
+  expect(save.args.settings.theme).toBe("dark");
+});
+
 test("removing a page tab requires confirmation and removes that page", async ({ page }) => {
   await openApp(page, {
     pages: [
@@ -533,6 +550,18 @@ test("removing a page tab requires confirmation and removes that page", async ({
   await expect.poll(async () => page.evaluate(() =>
     window.__testCalls.filter(({ command }) => command === "cleanup_pages").length
   )).toBe(1);
+});
+
+test("empty document tabs disable rescan, upload, and reset", async ({ page }) => {
+  await openApp(page);
+
+  await page.locator(".thumb-remove").click();
+  await page.locator("#confirm-action").click();
+
+  await expect(page.locator("#add-page")).toBeEnabled();
+  await expect(page.locator("#rescan")).toBeDisabled();
+  await expect(page.locator("#upload")).toBeDisabled();
+  await expect(page.locator("#reset")).toBeDisabled();
 });
 
 test("filename prompt can be disabled in Settings", async ({ page }) => {

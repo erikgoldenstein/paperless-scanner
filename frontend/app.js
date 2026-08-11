@@ -29,7 +29,8 @@ const state = {
     simple_mode: false,
     ask_for_filename: true,
     hash_file_naming: true,
-    debug_history: false
+    debug_history: false,
+    theme: "system"
   },
   busy: false,
   scanning: false,
@@ -55,6 +56,31 @@ const MIN_PREVIEW_ZOOM = 1;
 const MAX_PREVIEW_ZOOM = 4;
 
 const $ = (id) => document.getElementById(id);
+
+const systemThemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)") || null;
+
+function normalizedTheme(theme) {
+  return ["dark", "light", "system"].includes(theme) ? theme : "system";
+}
+
+function applyTheme(theme = state.settings.theme) {
+  const selectedTheme = normalizedTheme(theme);
+  const dark = selectedTheme === "dark" || (selectedTheme === "system" && systemThemeQuery?.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.style.colorScheme = dark ? "dark" : "light";
+}
+
+function watchSystemTheme() {
+  if (!systemThemeQuery) return;
+  const update = () => {
+    if (normalizedTheme(state.settings.theme) === "system") applyTheme();
+  };
+  if (systemThemeQuery.addEventListener) systemThemeQuery.addEventListener("change", update);
+  else systemThemeQuery.addListener?.(update);
+}
+
+applyTheme();
+watchSystemTheme();
 
 function setStatus(message = "", kind = "") {
   const status = $("status");
@@ -323,11 +349,12 @@ function groupJob(document) {
 
 function updateActionButtons() {
   const document = currentDocument();
+  const hasPages = Boolean(document?.pages?.length);
   const scannerLocked = state.scanning || document?.upload?.state === "active";
   $("add-page").disabled = scannerLocked || !document;
-  $("rescan").disabled = scannerLocked || !document;
-  $("upload").disabled = state.busy || !document;
-  $("reset").disabled = state.busy || !document;
+  $("rescan").disabled = scannerLocked || !document || !hasPages;
+  $("upload").disabled = state.busy || !document || !hasPages;
+  $("reset").disabled = state.busy || !document || !hasPages;
   $("rotate-preview").disabled = state.busy || !document || document.selected === null;
   $("settings-button").disabled = state.busy;
 }
@@ -456,9 +483,25 @@ function renderDocumentGroups(options = {}) {
   const archivedSections = [...container.querySelectorAll(".document-group.archived")];
   const currentSections = [...container.querySelectorAll(".document-group:not(.archived)")];
   if (archivedSections.length && currentSections.length) {
+    const currentBoundary = currentSections[0];
+    currentBoundary.classList.add("current-boundary");
+    const archiveBoundaryFade = document.createElement("div");
+    archiveBoundaryFade.className = "archive-boundary-fade";
+    const archiveHint = document.createElement("span");
+    archiveHint.className = "archive-hint";
+    archiveHint.textContent = "previous";
+    archiveHint.setAttribute("aria-hidden", "true");
+    container.append(archiveBoundaryFade, archiveHint);
+    const containerBox = container.getBoundingClientRect();
+    const currentBox = currentBoundary.getBoundingClientRect();
+    const boundaryLeft = currentBox.left - containerBox.left + container.scrollLeft;
+    archiveBoundaryFade.style.left = `${boundaryLeft}px`;
+    archiveHint.style.left = `${boundaryLeft}px`;
     const gap = Number.parseFloat(getComputedStyle(container).columnGap || getComputedStyle(container).gap) || 0;
+    const leadingMargin = Number.parseFloat(getComputedStyle(currentBoundary).marginLeft) || 0;
     const currentWidth = currentSections.reduce((total, section) => total + section.getBoundingClientRect().width, 0)
-      + gap * Math.max(0, currentSections.length - 1);
+      + gap * Math.max(0, currentSections.length - 1)
+      + leadingMargin;
     if (currentWidth < container.clientWidth) {
       const spacer = document.createElement("div");
       spacer.className = "archive-spacer";
@@ -1062,6 +1105,7 @@ function fillSettingsForm() {
   $("compression-value").textContent = `${state.settings.compression}%`;
   $("compression-format").value = state.settings.compression_format || "jpeg";
   $("paper-format").value = state.settings.paper_format || "a4";
+  $("theme").value = normalizedTheme(state.settings.theme);
   $("max-upload-size").value = String(state.settings.max_upload_size_mb || 10);
   $("simple-mode").checked = Boolean(state.settings.simple_mode);
   $("ask-for-filename").checked = state.settings.ask_for_filename !== false;
@@ -1110,6 +1154,7 @@ async function saveSettings(event) {
     compression: Number($("compression").value),
     compression_format: $("compression-format").value,
     paper_format: $("paper-format").value,
+    theme: normalizedTheme($("theme").value),
     max_upload_size_mb: Math.max(1, Number($("max-upload-size").value) || 10),
     simple_mode: $("simple-mode").checked,
     ask_for_filename: $("ask-for-filename").checked,
@@ -1118,6 +1163,7 @@ async function saveSettings(event) {
   };
   try {
     await invoke("save_settings", { settings: state.settings });
+    applyTheme();
     if (state.settings.simple_mode) {
       const document = currentDocument();
       if (document) {
@@ -1224,8 +1270,10 @@ invoke("load_settings")
     state.settings = {
       ...state.settings,
       ...settings,
-      scanner: { ...state.settings.scanner, ...settings.scanner }
+      scanner: { ...state.settings.scanner, ...settings.scanner },
+      theme: normalizedTheme(settings.theme)
     };
+    applyTheme();
     render();
   })
   .catch((error) => setStatus(String(error), "error"));

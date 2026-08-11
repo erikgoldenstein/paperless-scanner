@@ -206,6 +206,10 @@ fn default_max_upload_size_mb() -> u32 {
     10
 }
 
+fn default_theme() -> String {
+    "system".to_string()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CompressionFormat {
@@ -265,6 +269,8 @@ pub struct AppSettings {
     pub debug_history: bool,
     #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: u32,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 impl Default for AppSettings {
@@ -281,6 +287,7 @@ impl Default for AppSettings {
             hash_file_naming: default_hash_file_naming(),
             debug_history: false,
             max_upload_size_mb: default_max_upload_size_mb(),
+            theme: default_theme(),
         }
     }
 }

@@ -72,7 +72,9 @@ function documentsForMode(documents, simpleMode) {
 
 function documentsForBar(documents, simpleMode) {
   const limitedDocuments = limitArchivedDocuments(documents, 25);
-  const archives = limitedDocuments.filter((document) => document.archived);
+  // Archives are retained newest-first, but the tab bar reads left to right.
+  // Reverse only the displayed slice so the newest archive is the rightmost.
+  const archives = limitedDocuments.filter((document) => document.archived).reverse();
   return [...archives, ...documentsForMode(limitedDocuments, simpleMode)];
 }
 

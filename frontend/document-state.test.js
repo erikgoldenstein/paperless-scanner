@@ -103,13 +103,20 @@ test("archived documents keep preview data but no filesystem paths", () => {
   }]);
 });
 
-test("archive groups are ordered before current groups and excluded from simple mode selection", () => {
-  const archive = createArchivedDocument("archive-upload-1", []);
+test("archive groups are ordered oldest to newest before current groups", () => {
+  const newestArchive = createArchivedDocument("archive-upload-2", []);
+  const oldestArchive = createArchivedDocument("archive-upload-1", []);
   const current = createDocument("document-2", ["page-2"]);
   const otherCurrent = createDocument("document-3", ["page-3"]);
 
-  assert.deepEqual(documentsForBar([current, archive, otherCurrent], false), [archive, current, otherCurrent]);
-  assert.deepEqual(documentsForBar([current, archive, otherCurrent], true), [archive, otherCurrent]);
+  assert.deepEqual(
+    documentsForBar([current, newestArchive, oldestArchive, otherCurrent], false),
+    [oldestArchive, newestArchive, current, otherCurrent]
+  );
+  assert.deepEqual(
+    documentsForBar([current, newestArchive, oldestArchive, otherCurrent], true),
+    [oldestArchive, newestArchive, otherCurrent]
+  );
 });
 
 test("only the newest 25 archived documents are retained", () => {
