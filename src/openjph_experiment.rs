@@ -6,7 +6,9 @@ use openjph_core::types::{Point, Size};
 pub fn encode_rgb(image: &RgbImage, quality: u8) -> Result<Vec<u8>, String> {
     let (width, height) = image.dimensions();
     let pixel_count = (width * height) as usize;
-    let mut components = vec![Vec::with_capacity(pixel_count); 3];
+    let mut components = (0..3)
+        .map(|_| Vec::with_capacity(pixel_count))
+        .collect::<Vec<_>>();
     for pixel in image.pixels() {
         components[0].push(i32::from(pixel[0]));
         components[1].push(i32::from(pixel[1]));

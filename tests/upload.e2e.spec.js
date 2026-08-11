@@ -512,6 +512,17 @@ test("simple mode can be enabled from Settings", async ({ page }) => {
   await expect(page.locator(".document-group-header")).toHaveCount(0);
 });
 
+test("Settings warns when the Paperless URL uses HTTP", async ({ page }) => {
+  await openApp(page);
+
+  await page.locator("#settings-button").click();
+  await expect(page.locator("#paperless-url-warning")).toBeVisible();
+  await page.locator("#paperless-url").fill("https://paperless.example");
+  await expect(page.locator("#paperless-url-warning")).toBeHidden();
+  await page.locator("#paperless-url").fill("http://paperless.example");
+  await expect(page.locator("#paperless-url-warning")).toBeVisible();
+});
+
 test("theme setting supports light and dark modes and follows the system theme", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await openApp(page);

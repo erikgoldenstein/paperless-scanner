@@ -1111,6 +1111,19 @@ function fillSettingsForm() {
   $("ask-for-filename").checked = state.settings.ask_for_filename !== false;
   $("hash-file-naming").checked = state.settings.hash_file_naming !== false;
   $("debug-history").checked = Boolean(state.settings.debug_history);
+  updatePaperlessUrlWarning();
+}
+
+function updatePaperlessUrlWarning() {
+  const warning = $("paperless-url-warning");
+  if (!warning) return;
+  let insecure = false;
+  try {
+    insecure = new URL($("paperless-url").value.trim()).protocol === "http:";
+  } catch {
+    insecure = false;
+  }
+  warning.hidden = !insecure;
 }
 
 async function refreshScanners() {
@@ -1250,6 +1263,7 @@ $("confirm-form").addEventListener("submit", (event) => {
   onConfirm?.();
 });
 $("settings-form").addEventListener("submit", saveSettings);
+$("paperless-url").addEventListener("input", updatePaperlessUrlWarning);
 $("compression").addEventListener("input", (event) => {
   $("compression-value").textContent = `${event.target.value}%`;
 });

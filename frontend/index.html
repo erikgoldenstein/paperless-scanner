@@ -140,6 +140,9 @@
           Paperless URL
           <input id="paperless-url" type="url" placeholder="https://paperless.example" />
         </label>
+        <p id="paperless-url-warning" class="dialog-hint warning" hidden>
+          Warning: this URL uses HTTP. Your Paperless token and scanned documents will be sent without transport encryption.
+        </p>
 
         <label>
           API token

@@ -210,33 +210,23 @@ fn default_theme() -> String {
     "system".to_string()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum CompressionFormat {
+    #[default]
     Jpeg,
     Jpeg2000,
 }
 
-impl Default for CompressionFormat {
-    fn default() -> Self {
-        Self::Jpeg
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PaperFormat {
+    #[default]
     A4,
     #[serde(rename = "us-letter")]
     UsLetter,
     Legal,
     A5,
-}
-
-impl Default for PaperFormat {
-    fn default() -> Self {
-        Self::A4
-    }
 }
 
 fn paper_size_points(format: PaperFormat) -> (f32, f32) {
@@ -252,6 +242,7 @@ fn paper_size_points(format: PaperFormat) -> (f32, f32) {
 pub struct AppSettings {
     pub scanner: ScanSettings,
     pub paperless_url: String,
+    #[serde(default)]
     pub paperless_token: String,
     #[serde(default = "default_compression")]
     pub compression: u8,
@@ -493,7 +484,7 @@ pub fn restore_pages() -> Result<Vec<ScanResult>, String> {
     let mut paths = fs::read_dir(page_directory()?)
         .map_err(|error| format!("Could not read saved pages: {error}"))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| is_page_file(path))
+        .filter(|path| is_regular_page_file(path))
         .collect::<Vec<_>>();
     paths.sort();
     let mut pages = Vec::new();
@@ -577,30 +568,77 @@ pub fn cleanup_pages(paths: Vec<String>) -> Result<(), String> {
 }
 
 #[cfg(feature = "gui")]
+pub fn cleanup_all_pages() -> Result<(), String> {
+    cleanup_directory_files(&page_directory()?)
+}
+
+#[cfg(any(feature = "gui", test))]
+fn cleanup_directory_files(directory: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| format!("Could not read temporary scan directory: {error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("Could not inspect temporary scan directory: {error}"))?
+            .path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("Could not inspect temporary scan file: {error}"))?;
+        if metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            std::fs::remove_file(path)
+                .map_err(|error| format!("Could not remove temporary scan file: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "gui")]
 pub fn load_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
     use std::fs;
 
     let path = settings_path(&app)?;
-    if !path.exists() {
-        return Ok(AppSettings::default());
+    let mut settings = if path.exists() {
+        let contents = fs::read_to_string(&path)
+            .map_err(|error| format!("Could not read settings: {error}"))?;
+        serde_json::from_str(&contents)
+            .map_err(|error| format!("Could not parse settings: {error}"))?
+    } else {
+        AppSettings::default()
+    };
+    let legacy_token = std::mem::take(&mut settings.paperless_token);
+    let keyring_token = load_paperless_token()?;
+    let (token, should_rewrite_settings) = resolve_paperless_token(legacy_token, keyring_token);
+    if token != settings.paperless_token {
+        settings.paperless_token = token;
     }
-    let contents =
-        fs::read_to_string(path).map_err(|error| format!("Could not read settings: {error}"))?;
-    serde_json::from_str(&contents).map_err(|error| format!("Could not parse settings: {error}"))
+    if should_rewrite_settings {
+        if settings.paperless_token.is_empty() {
+            return Err("Could not migrate the Paperless token".to_string());
+        }
+        save_paperless_token(&settings.paperless_token)?;
+        write_settings_file(&path, &settings)?;
+    }
+    Ok(settings)
+}
+
+#[cfg(feature = "gui")]
+fn resolve_paperless_token(legacy_token: String, keyring_token: String) -> (String, bool) {
+    let token = if keyring_token.is_empty() {
+        legacy_token.clone()
+    } else {
+        keyring_token
+    };
+    (token, !legacy_token.is_empty())
 }
 
 #[cfg(feature = "gui")]
 pub fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
-    use std::fs;
-
     let path = settings_path(&app)?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
+        std::fs::create_dir_all(parent)
             .map_err(|error| format!("Could not create settings directory: {error}"))?;
+        set_private_directory_permissions(parent)?;
     }
-    let contents = serde_json::to_string_pretty(&settings)
-        .map_err(|error| format!("Could not encode settings: {error}"))?;
-    fs::write(path, contents).map_err(|error| format!("Could not save settings: {error}"))
+    save_paperless_token(&settings.paperless_token)?;
+    write_settings_file(&path, &settings)
 }
 
 #[cfg(feature = "gui")]
@@ -645,6 +683,7 @@ where
     if rotations.len() != paths.len() {
         return Err("Each page must have one rotation value".to_string());
     }
+    validate_upload_paths(&paths)?;
     if settings.paperless_url.trim().is_empty() {
         return Err("Set the Paperless URL in Settings first".to_string());
     }
@@ -857,7 +896,139 @@ fn page_directory() -> Result<PathBuf, String> {
     let directory = std::env::temp_dir().join("paperless-scanner");
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("Could not create temporary scan directory: {error}"))?;
+    let metadata = std::fs::symlink_metadata(&directory)
+        .map_err(|error| format!("Could not inspect temporary scan directory: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("Temporary scan path is not a private directory".to_string());
+    }
+    set_private_directory_permissions(&directory)?;
     Ok(directory)
+}
+
+#[cfg(any(feature = "gui", test))]
+fn is_regular_page_file(path: &Path) -> bool {
+    is_page_file(path)
+        && std::fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_file())
+            .unwrap_or(false)
+}
+
+#[cfg(any(feature = "gui", test))]
+fn validate_upload_paths(paths: &[String]) -> Result<(), String> {
+    let directory = page_directory()?;
+    let canonical_directory = std::fs::canonicalize(&directory)
+        .map_err(|error| format!("Could not resolve temporary scan directory: {error}"))?;
+    for path in paths {
+        let path = PathBuf::from(path);
+        if path.parent() != Some(directory.as_path()) || !is_page_file(&path) {
+            return Err("Uploads may only use pages created by Paperless Scanner".to_string());
+        }
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("Could not inspect scan page: {error}"))?;
+        if !metadata.file_type().is_file() {
+            return Err("Uploads may not use symlinks or non-regular files".to_string());
+        }
+        let canonical_path = std::fs::canonicalize(&path)
+            .map_err(|error| format!("Could not resolve scan page: {error}"))?;
+        if canonical_path.parent() != Some(canonical_directory.as_path()) {
+            return Err("Uploads may only use pages created by Paperless Scanner".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "gui", test))]
+fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Could not secure private directory: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "gui", test))]
+fn set_private_file_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("Could not secure private file: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "gui")]
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("Could not open private file: {error}"))?;
+    file.write_all(contents)
+        .map_err(|error| format!("Could not write private file: {error}"))?;
+    set_private_file_permissions(path)
+}
+
+#[cfg(feature = "gui")]
+fn write_settings_file(path: &Path, settings: &AppSettings) -> Result<(), String> {
+    let mut value = serde_json::to_value(settings)
+        .map_err(|error| format!("Could not encode settings: {error}"))?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("paperless_token");
+    }
+    let contents = serde_json::to_vec_pretty(&value)
+        .map_err(|error| format!("Could not encode settings: {error}"))?;
+    write_private_file(path, &contents)
+}
+
+#[cfg(feature = "gui")]
+fn paperless_token_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(
+        "com.erikgoldenstein.paperlessscanner",
+        "paperless-api-token",
+    )
+    .map_err(|error| format!("Could not access the desktop keyring: {error}"))
+}
+
+#[cfg(feature = "gui")]
+fn load_paperless_token() -> Result<String, String> {
+    match paperless_token_entry()?.get_password() {
+        Ok(token) => Ok(token),
+        Err(keyring::Error::NoEntry) => Ok(String::new()),
+        Err(error) => Err(format!(
+            "Could not read the Paperless token from the desktop keyring: {error}"
+        )),
+    }
+}
+
+#[cfg(feature = "gui")]
+fn save_paperless_token(token: &str) -> Result<(), String> {
+    let entry = paperless_token_entry()?;
+    if token.trim().is_empty() {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(format!(
+                "Could not remove the Paperless token from the desktop keyring: {error}"
+            )),
+        }
+    } else {
+        entry.set_password(token.trim()).map_err(|error| {
+            format!("Could not save the Paperless token to the desktop keyring: {error}")
+        })
+    }
 }
 
 #[cfg(feature = "gui")]
@@ -882,16 +1053,25 @@ fn command_error(command: &str, output: &std::process::Output) -> String {
 
 #[cfg(feature = "gui")]
 fn run_scanimage(args: &[String], output_path: &Path) -> Result<std::process::Output, String> {
-    use std::fs::File;
+    use std::fs::OpenOptions;
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
 
+    let mut output_options = OpenOptions::new();
+    output_options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        output_options.mode(0o600);
+    }
+    let output_file = output_options
+        .open(output_path)
+        .map_err(|error| format!("Could not create scan output: {error}"))?;
     let mut child = Command::new("scanimage")
         .args(args)
-        .stdout(Stdio::from(File::create(output_path).map_err(|error| {
-            format!("Could not create scan output: {error}")
-        })?))
+        .stdout(Stdio::from(output_file))
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("Could not run scanimage: {error}"))?;
@@ -1087,6 +1267,7 @@ fn make_pdf(
     document
         .save(&output)
         .map_err(|error| format!("Could not write PDF: {error}"))?;
+    set_private_file_permissions(&output)?;
     Ok(output)
 }
 
@@ -1261,13 +1442,22 @@ pub fn run() {
             commands::save_settings,
             commands::upload_document,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Paperless Scanner");
+        .build(tauri::generate_context!())
+        .expect("error while building Paperless Scanner")
+        .run(|_, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Err(error) = cleanup_all_pages() {
+                    eprintln!("Could not clean up temporary scan files: {error}");
+                }
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn adding_pages_appends_and_selects_the_new_page() {
@@ -1602,6 +1792,98 @@ mod tests {
 
     #[cfg(feature = "gui")]
     #[test]
+    fn upload_paths_are_confined_to_regular_session_pages() {
+        let directory = page_directory().unwrap();
+        let valid = directory.join(format!("page-validation-{}.png", unique_id()));
+        std::fs::write(&valid, b"not an image").unwrap();
+        assert!(validate_upload_paths(&[valid.to_string_lossy().into_owned()]).is_ok());
+        std::fs::remove_file(&valid).unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        let outside_page = outside.path().join("page-outside.png");
+        std::fs::write(&outside_page, b"not an image").unwrap();
+        assert!(validate_upload_paths(&[outside_page.to_string_lossy().into_owned()]).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let target = outside.path().join("target.png");
+            let link = directory.join(format!("page-link-{}.png", unique_id()));
+            std::fs::write(&target, b"not an image").unwrap();
+            symlink(&target, &link).unwrap();
+            assert!(validate_upload_paths(&[link.to_string_lossy().into_owned()]).is_err());
+            std::fs::remove_file(link).unwrap();
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn persisted_settings_do_not_contain_the_paperless_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let settings = AppSettings {
+            paperless_token: "test-token-that-must-not-be-written".to_string(),
+            ..AppSettings::default()
+        };
+
+        write_settings_file(&path, &settings).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("paperless_token"));
+        assert!(!contents.contains("test-token-that-must-not-be-written"));
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn legacy_plaintext_token_is_rewritten_even_when_keyring_already_has_one() {
+        let (token, should_rewrite) =
+            resolve_paperless_token("legacy-token".to_string(), "keyring-token".to_string());
+
+        assert_eq!(token, "keyring-token");
+        assert!(should_rewrite);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_directory_permissions_are_owner_only() {
+        let directory = tempfile::tempdir().unwrap();
+
+        set_private_directory_permissions(directory.path()).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(directory.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn cleanup_directory_removes_session_files_but_keeps_the_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let page = directory.path().join("page-session.png");
+        let pdf = directory.path().join("upload-session.pdf");
+        std::fs::write(&page, b"page").unwrap();
+        std::fs::write(&pdf, b"pdf").unwrap();
+
+        cleanup_directory_files(directory.path()).unwrap();
+
+        assert!(!page.exists());
+        assert!(!pdf.exists());
+        assert!(directory.path().is_dir());
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
     fn scan_previews_are_bounded_for_fast_page_switching() {
         use base64::Engine;
 
@@ -1874,8 +2156,9 @@ mod tests {
             }
         });
 
-        let directory = tempfile::tempdir().unwrap();
-        let page = directory.path().join("page.png");
+        let page = page_directory()
+            .unwrap()
+            .join(format!("page-upload-test-{}.png", unique_id()));
         image::RgbImage::from_fn(600, 600, |x, y| {
             image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x * y) % 256) as u8])
         })
@@ -1916,5 +2199,6 @@ mod tests {
         assert_eq!(sizes.len(), 2);
         assert!(sizes[1] < sizes[0]);
         server.join().unwrap();
+        std::fs::remove_file(page).unwrap();
     }
 }

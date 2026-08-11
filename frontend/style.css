@@ -19,6 +19,7 @@
   --selected-bg: #dcecff;
   --error-bg: #fff1f1;
   --error-text: #a02626;
+  --warning-text: #8a5a00;
   --success-text: #176d3d;
   --upload-badge: #245f9f;
   color: var(--text);
@@ -47,6 +48,7 @@
   --selected-bg: #244463;
   --error-bg: #4a2528;
   --error-text: #ff9c9c;
+  --warning-text: #ffc56b;
   --success-text: #70d095;
   --upload-badge: #8fc5f4;
 }
@@ -268,3 +270,4 @@ input, select { border: 1px solid var(--border-strong); border-radius: 6px; padd
 #status-history-list li + li { margin-top: 6px; }
 .scanner-status { margin: -6px 0 0; color: var(--text-muted); font-size: .9rem; }
 .dialog-hint { margin: -5px 0 0; color: var(--text-muted); font-size: .9rem; }
+.dialog-hint.warning { color: var(--warning-text); }

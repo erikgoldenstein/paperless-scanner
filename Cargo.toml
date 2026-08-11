@@ -2,8 +2,11 @@
 name = "paperless-scanner"
 version = "0.1.0"
 description = "A small desktop scanner client for Paperless-ngx"
-authors = ["Paperless Scanner contributors"]
+authors = ["Erik Goldenstein"]
 license = "GPL-3.0-or-later"
+repository = "https://github.com/erikgoldenstein/simple-scan-paperless"
+homepage = "https://github.com/erikgoldenstein/simple-scan-paperless"
+readme = "README.md"
 edition = "2021"
 
 [lib]
@@ -26,6 +29,7 @@ tauri-build = { version = "2", features = [], optional = true }
 [dependencies]
 base64 = "0.22"
 image = "0.24"
+keyring = "4.1"
 lopdf = "0.31"
 openjpeg-sys = { version = "1.0.10", features = ["threads"] }
 openjph-core = { version = "0.1", optional = true }
