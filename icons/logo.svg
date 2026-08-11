@@ -2,7 +2,7 @@
   <title id="title">Paperless Scanner</title>
   <desc id="desc">A page entering a four-color shredder and shredded strips leaving below.</desc>
 
-  <!-- Incoming page with the approved diagonal cut. -->
+  <!-- Plain page entering from above. -->
   <path d="M9.5 7h37.5l7.5 7.5V26h-45z" fill="#fff" stroke="#20242a" stroke-width=".75"/>
 
   <!-- Seven offset strips of paper leaving below, behind the shredder blocks. -->

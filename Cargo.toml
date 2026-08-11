@@ -3,6 +3,7 @@ name = "paperless-scanner"
 version = "0.1.0"
 description = "A small desktop scanner client for Paperless-ngx"
 authors = ["Paperless Scanner contributors"]
+license = "GPL-3.0-or-later"
 edition = "2021"
 
 [lib]
