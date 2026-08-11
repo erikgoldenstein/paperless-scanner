@@ -46,6 +46,12 @@ credential store.
 Debian and Fedora packages are built for tagged releases. See the
 [release page](https://github.com/erikgoldenstein/simple-scan-paperless/releases).
 
+With Nix, run it directly with:
+
+```sh
+nix shell github:erikgoldenstein/simple-scan-paperless -c paperless-scanner
+```
+
 ## Development
 
 See [docs/development.md](docs/development.md) for the project layout, test
