@@ -52,10 +52,10 @@ your distribution:
 
 ```sh
 # Debian or Ubuntu
-sudo apt install ./paperless-scanner_<version>_amd64.deb
+sudo apt install './Paperless Scanner_<version>_amd64.deb'
 
 # Fedora
-sudo dnf install ./paperless-scanner-<version>-1.x86_64.rpm
+sudo dnf install './Paperless Scanner-<version>-1.x86_64.rpm'
 ```
 
 The packages install the desktop launcher and pull in the required Linux
