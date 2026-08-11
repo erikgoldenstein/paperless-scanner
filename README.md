@@ -1,14 +1,16 @@
 <div align="center">
   <img src="icons/icon.svg" alt="Paperless Scanner logo" width="96" height="96">
   <h1>Paperless Scanner</h1>
-  <p>A focused desktop scanner client for Paperless-ngx.</p>
+  <p>The quickest desktop scanner client for Paperless-ngx.</p>
 </div>
 
-Paperless Scanner is a small, touch-friendly desktop application for scanning
-multi-page documents, reviewing them, turning them into PDFs, and uploading
-them directly to a Paperless-ngx instance. It is built with Rust, Tauri, and a
-plain HTML/CSS/JavaScript frontend.
+Paperless Scanner is the fastest and least painful way to quickly ingest large numbers of documents into a paperless instance using a dedicated scanner.
 
+It is a small, touch-friendly desktop application for scanning
+multi-page documents, reviewing them, turning them into PDFs, and uploading
+them directly to a Paperless-ngx instance.
+
+It is built with Rust, Tauri, and a plain HTML/CSS/JavaScript frontend.
 The current implementation is Linux-first and uses SANE's `scanimage`
 command. The project is intentionally small and straightforward so that
 platform-specific scanner backends and improvements to the document workflow
@@ -17,6 +19,8 @@ can be added without replacing the frontend.
 ## Application screenshot
 
 <!-- TODO: add an application screenshot here. -->
+tbd
+
 
 ## Getting Started
 
