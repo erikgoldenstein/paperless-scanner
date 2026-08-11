@@ -34,8 +34,14 @@ Build a local executable without packaging:
 cargo tauri build --features gui --no-bundle
 ```
 
-Tagged CI releases build Debian and Fedora packages. A Linux Nix build is
-available with:
+Build the release packages locally with:
+
+```sh
+./scripts/build-packages.sh 0.1.0
+```
+
+Tagged CI releases build and publish the same Debian and Fedora packages. A
+Linux Nix build is available with:
 
 ```sh
 nix build

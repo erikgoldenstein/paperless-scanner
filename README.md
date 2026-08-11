@@ -43,8 +43,24 @@ On first launch, choose a scanner and enter your Paperless-ngx URL and API
 token. HTTPS is recommended. The token is stored in the operating system's
 credential store.
 
-Debian and Fedora packages are built for tagged releases. See the
-[release page](https://github.com/erikgoldenstein/simple-scan-paperless/releases).
+## Install a release
+
+Tagged releases publish x86_64 Debian (`.deb`) and Fedora (`.rpm`) packages on
+the [release page](https://github.com/erikgoldenstein/simple-scan-paperless/releases).
+Download both packages from the release assets, then install the one matching
+your distribution:
+
+```sh
+# Debian or Ubuntu
+sudo apt install ./paperless-scanner_<version>_amd64.deb
+
+# Fedora
+sudo dnf install ./paperless-scanner-<version>-1.x86_64.rpm
+```
+
+The packages install the desktop launcher and pull in the required Linux
+runtime libraries. SANE still needs to be configured separately; verify that
+your scanner is visible with `scanimage -L`.
 
 With Nix, run it directly with:
 

@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -40,24 +44,38 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version '^2' --locked
 
-      - name: Set package version from tag
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          VERSION="${RELEASE_TAG#v}"
-          jq --arg version "$VERSION" '.version = $version' tauri.conf.json > tauri.conf.json.tmp
-          mv tauri.conf.json.tmp tauri.conf.json
-
       - name: Build Debian and Fedora packages
-        run: cargo tauri build --ci --features gui --bundles deb rpm
+        run: ./scripts/build-packages.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Validate package artifacts
+        run: |
+          shopt -s nullglob
+          deb_packages=(target/release/bundle/deb/*.deb)
+          rpm_packages=(target/release/bundle/rpm/*.rpm)
+          test "${#deb_packages[@]}" -eq 1
+          test "${#rpm_packages[@]}" -eq 1
+          dpkg-deb --info "${deb_packages[0]}"
+          rpm --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' -qp "${rpm_packages[0]}"
+
+      - name: Upload packages to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperless-scanner-linux-${{ github.ref_name }}
+          if-no-files-found: error
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            target/release/bundle/deb/*.deb \
-            target/release/bundle/rpm/*.rpm \
-            --verify-tag \
-            --generate-notes \
-            --title "$GITHUB_REF_NAME"
+          packages=(target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${packages[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${packages[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME"
+          fi
