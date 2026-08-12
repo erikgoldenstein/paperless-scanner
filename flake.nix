@@ -18,7 +18,7 @@
             gtk3
             libayatana-appindicator
             librsvg
-            libxdo
+            xdotool
             openssl
             sane-backends
             webkitgtk_4_1
@@ -64,7 +64,7 @@
               pkgs.gtk3
               pkgs.libayatana-appindicator
               pkgs.librsvg
-              pkgs.libxdo
+              pkgs.xdotool
               pkgs.openssl
               pkgs.sane-backends
               pkgs.webkitgtk_4_1
