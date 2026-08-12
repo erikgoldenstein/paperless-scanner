@@ -6,6 +6,8 @@ use thiserror::Error;
 #[cfg(feature = "openjph-experiment")]
 pub mod openjph_experiment;
 
+pub mod scanner;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Page {
     pub path: PathBuf,
@@ -74,17 +76,27 @@ pub enum SessionError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanSettings {
+    #[serde(default = "default_scanner_backend")]
+    pub backend: String,
     pub device: String,
     pub resolution: u32,
     pub mode: String,
+    #[serde(default)]
+    pub escl_url: String,
+}
+
+fn default_scanner_backend() -> String {
+    "auto".to_string()
 }
 
 impl Default for ScanSettings {
     fn default() -> Self {
         Self {
+            backend: default_scanner_backend(),
             device: String::new(),
             resolution: 300,
             mode: "Color".to_string(),
+            escl_url: String::new(),
         }
     }
 }
@@ -290,28 +302,20 @@ pub struct ScanResult {
     pub thumbnail: String,
 }
 
+pub use scanner::{
+    scanner_backend_options, scanner_backend_status, ScannerBackend, ScannerBackendStatus,
+};
+
 #[cfg(feature = "gui")]
-pub async fn list_scanners() -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(list_scanners_sync)
+pub async fn list_scanners(settings: ScanSettings) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || list_scanners_sync(settings))
         .await
         .map_err(|error| format!("Scanner lookup failed: {error}"))?
 }
 
 #[cfg(feature = "gui")]
-fn list_scanners_sync() -> Result<Vec<String>, String> {
-    let output = run_scanimage_capture(
-        &["-L".to_string()],
-        std::time::Duration::from_secs(5),
-        "Scanner discovery timed out. Reconnect the scanner and try again.",
-    )?;
-
-    if !output.status.success() {
-        return Err(command_error("scanimage -L", &output));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Ok(parse_scanner_list(&format!("{stdout}\n{stderr}")))
+fn list_scanners_sync(settings: ScanSettings) -> Result<Vec<String>, String> {
+    scanner::scanner_backend_for(&settings)?.list_scanners()
 }
 
 pub fn parse_scanner_list(output: &str) -> Vec<String> {
@@ -422,14 +426,14 @@ pub async fn scan_page(settings: ScanSettings) -> Result<ScanResult, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     tauri::async_runtime::spawn_blocking(move || {
+        let backend = scanner::scanner_backend_for(&settings)?;
         let mut settings = settings;
         if settings.device.trim().is_empty() {
-            let scanners = list_scanners_sync()?;
+            let scanners = backend.list_scanners()?;
             settings.device = default_scanner_device(&scanners).ok_or_else(|| {
                 "No scanner detected. Reconnect the scanner and try again.".to_string()
             })?;
         }
-        preflight_scanner(&settings.device)?;
         let directory = page_directory()?;
         fs::create_dir_all(&directory)
             .map_err(|error| format!("Could not create temporary scan directory: {error}"))?;
@@ -439,33 +443,12 @@ pub async fn scan_page(settings: ScanSettings) -> Result<ScanResult, String> {
             .map_err(|error| format!("Could not create scan filename: {error}"))?
             .as_nanos();
         let path = directory.join(format!("page-{id}.png"));
-        let mut args = scanimage_args(&settings);
-        let mut skipped_options = Vec::new();
-        let output = loop {
-            let output = match run_scanimage(&args, &path) {
-                Ok(output) => output,
-                Err(error) => {
-                    let _ = fs::remove_file(&path);
-                    return Err(error);
-                }
-            };
-            if output.status.success() {
-                break output;
-            }
-            if let Some(option) = unsupported_scan_option(&String::from_utf8_lossy(&output.stderr))
-            {
-                if !skipped_options.contains(&option) {
-                    args = remove_scan_option(&args, option);
-                    skipped_options.push(option);
-                    let _ = fs::remove_file(&path);
-                    continue;
-                }
-            }
+        if let Err(error) = backend.scan(&settings, &path) {
             let _ = fs::remove_file(&path);
-            return Err(scanner_command_error(&output));
-        };
+            return Err(error);
+        }
 
-        match finalize_scan_output(&path, &output) {
+        match scan_result_from_path(path.clone()) {
             Ok(result) => Ok(result),
             Err(error) => {
                 let _ = fs::remove_file(&path);
@@ -1375,12 +1358,22 @@ fn unique_id() -> u128 {
 
 #[cfg(feature = "gui")]
 mod commands {
-    use super::{AppSettings, ScanResult, ScanSettings};
+    use super::{AppSettings, ScanResult, ScanSettings, ScannerBackendStatus};
     use tauri::AppHandle;
 
     #[tauri::command]
-    pub async fn list_scanners() -> Result<Vec<String>, String> {
-        super::list_scanners().await
+    pub async fn list_scanners(settings: ScanSettings) -> Result<Vec<String>, String> {
+        super::list_scanners(settings).await
+    }
+
+    #[tauri::command]
+    pub fn scanner_backend_status() -> ScannerBackendStatus {
+        super::scanner_backend_status()
+    }
+
+    #[tauri::command]
+    pub fn scanner_backend_options() -> Vec<ScannerBackendStatus> {
+        super::scanner_backend_options()
     }
 
     #[tauri::command]
@@ -1435,6 +1428,8 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::list_scanners,
+            commands::scanner_backend_status,
+            commands::scanner_backend_options,
             commands::scan_page,
             commands::restore_pages,
             commands::cleanup_pages,
@@ -1539,9 +1534,11 @@ mod tests {
     #[test]
     fn scan_arguments_are_safe_for_device_names_with_spaces() {
         let settings = ScanSettings {
+            backend: "auto".to_string(),
             device: "airscan:escl:Office Scanner".to_string(),
             resolution: 300,
             mode: "Color".to_string(),
+            escl_url: String::new(),
         };
         let args = scanimage_args(&settings);
 

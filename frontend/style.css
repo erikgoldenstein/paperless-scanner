@@ -64,9 +64,19 @@ button { cursor: pointer; }
 .app-shell {
   height: 100vh;
   display: grid;
-  grid-template-rows: 176px minmax(0, 1fr);
+  grid-template-rows: auto 176px minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
+}
+
+.backend-warning {
+  padding: 10px 14px;
+  border: 1px solid #d08a22;
+  border-radius: 10px;
+  color: var(--warning-text);
+  background: color-mix(in srgb, #f4b642 18%, var(--surface));
+  font-weight: 700;
+  text-align: center;
 }
 
 .workspace {
@@ -258,6 +268,8 @@ input, select { border: 1px solid var(--border-strong); border-radius: 6px; padd
 .dialog-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 .dialog-actions { gap: 12px; }
 .confirm-actions { justify-content: stretch; }
+.backend-launch-dialog { z-index: 20; }
+.backend-launch-dialog form { padding: 26px; }
 .confirm-actions button { flex: 1; min-height: 64px; min-width: 150px; font-size: 1.1rem; }
 #confirm-form { gap: 18px; padding: 26px; }
 #confirm-message { margin: 0; color: var(--text-muted); }

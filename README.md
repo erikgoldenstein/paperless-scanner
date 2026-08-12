@@ -34,7 +34,7 @@ Install the system dependencies on Debian or Ubuntu:
 sudo apt update
 sudo apt install build-essential pkg-config \
   libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libssl-dev \
-  libayatana-appindicator3-dev librsvg2-dev patchelf sane-utils \
+  libayatana-appindicator3-dev librsvg2-dev patchelf sane-utils libsane-dev \
   libopenjp2-7-dev
 ```
 
@@ -79,8 +79,17 @@ Windows releases include an MSI and an NSIS installer. macOS releases are
 provided separately for Intel and Apple Silicon.
 
 The packages install the desktop launcher and pull in the required Linux
-runtime libraries. SANE still needs to be configured separately; verify that
-your scanner is visible with `scanimage -L`.
+runtime libraries. The Linux binary uses direct Rust `libsane` integration,
+but the SANE driver packages still need to be installed and configured
+separately; verify that your scanner is visible with `scanimage -L`. Windows
+uses the WIA service built into Windows, macOS uses ImageCaptureCore, and the
+eSCL backend talks directly to compatible network scanners. Those non-Linux
+backends are alpha and highly experimental in this release.
+
+To use an eSCL scanner, select the eSCL backend in Settings and enter its base
+HTTP URL (for example, `http://scanner.local`). The legacy
+`PAPERLESS_SCANNER_ESCL_URL` environment variable remains available as a
+fallback for scripted deployments.
 
 With Nix, run it directly with:
 

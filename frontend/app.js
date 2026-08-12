@@ -19,7 +19,7 @@ const state = {
   nextDocumentNumber: 2,
   nextJobNumber: 1,
   settings: {
-    scanner: { device: "", resolution: 300, mode: "Color" },
+    scanner: { backend: "auto", device: "", resolution: 300, mode: "Color", escl_url: "" },
     paperless_url: "",
     paperless_token: "",
     compression: 85,
@@ -37,7 +37,9 @@ const state = {
   scanGeneration: 0,
   uploadDialogJob: null,
   uploadDialogDocumentId: null,
-  confirmation: null
+  confirmation: null,
+  backendConfirmed: false,
+  scannerBackendOptions: []
 };
 
 let pageDrag = null;
@@ -86,6 +88,44 @@ function setStatus(message = "", kind = "") {
   const status = $("status");
   status.textContent = message;
   status.className = `status ${kind}`;
+}
+
+function applyBackendStatus(status) {
+  const warning = backendWarningText(status);
+  const banner = $("backend-warning");
+  banner.textContent = warning;
+  banner.hidden = !warning;
+  if (!warning) {
+    state.backendConfirmed = true;
+    return;
+  }
+  $("backend-launch-message").textContent = warning;
+  showDialog($("backend-launch-dialog"));
+}
+
+function selectedBackendOption() {
+  const id = $("scanner-backend")?.value || "auto";
+  return state.scannerBackendOptions.find((option) => option.id === id) || null;
+}
+
+function updateScannerBackendForm() {
+  const option = selectedBackendOption();
+  $("escl-settings").hidden = $("scanner-backend").value !== "escl";
+  $("scanner-backend-status").textContent = option?.experimental
+    ? (option.warning || "Untested scanner backend (alpha, highly experimental).")
+    : `${option?.name || "Automatic scanner backend"}.`;
+}
+
+async function loadScannerBackendOptions() {
+  state.scannerBackendOptions = await invoke("scanner_backend_options");
+  const select = $("scanner-backend");
+  select.replaceChildren();
+  state.scannerBackendOptions.forEach((option) => {
+    select.append(new Option(option.name, option.id));
+  });
+  select.value = state.settings.scanner.backend || "auto";
+  if (select.value !== state.settings.scanner.backend) select.value = "auto";
+  updateScannerBackendForm();
 }
 
 function recordHistory(target, message, kind = "debug") {
@@ -351,12 +391,13 @@ function updateActionButtons() {
   const document = currentDocument();
   const hasPages = Boolean(document?.pages?.length);
   const scannerLocked = state.scanning || document?.upload?.state === "active";
-  $("add-page").disabled = scannerLocked || !document;
-  $("rescan").disabled = scannerLocked || !document || !hasPages;
-  $("upload").disabled = state.busy || !document || !hasPages;
-  $("reset").disabled = state.busy || !document || !hasPages;
-  $("rotate-preview").disabled = state.busy || !document || document.selected === null;
-  $("settings-button").disabled = state.busy;
+  const backendLocked = !state.backendConfirmed;
+  $("add-page").disabled = backendLocked || scannerLocked || !document;
+  $("rescan").disabled = backendLocked || scannerLocked || !document || !hasPages;
+  $("upload").disabled = backendLocked || state.busy || !document || !hasPages;
+  $("reset").disabled = backendLocked || state.busy || !document || !hasPages;
+  $("rotate-preview").disabled = backendLocked || state.busy || !document || document.selected === null;
+  $("settings-button").disabled = backendLocked || state.busy;
 }
 
 function renderDocumentGroups(options = {}) {
@@ -1097,6 +1138,9 @@ async function removePage(documentId, index, expectedPath = "") {
 }
 
 function fillSettingsForm() {
+  $("scanner-backend").value = state.settings.scanner.backend || "auto";
+  $("escl-url").value = state.settings.scanner.escl_url || "";
+  updateScannerBackendForm();
   $("scanner-resolution").value = String(state.settings.scanner.resolution);
   $("scanner-mode").value = state.settings.scanner.mode;
   $("paperless-url").value = state.settings.paperless_url;
@@ -1134,11 +1178,16 @@ async function refreshScanners() {
   refreshButton.disabled = true;
   scannerStatus.textContent = "Looking for scanners…";
   try {
-    const scanners = await invoke("list_scanners");
+    const scannerSettings = {
+      ...state.settings.scanner,
+      backend: $("scanner-backend").value || state.settings.scanner.backend || "auto",
+      escl_url: $("escl-url").value.trim()
+    };
+    const scanners = await invoke("list_scanners", { settings: scannerSettings });
     scanners.forEach((scanner) => select.append(new Option(scanner, scanner)));
     select.value = state.settings.scanner.device;
     scannerStatus.textContent = scanners.length === 0
-      ? "No scanners found. Check SANE and try again."
+      ? "No scanners found. Check the scanner connection and try again."
       : `${scanners.length} scanner${scanners.length === 1 ? "" : "s"} found.`;
   } catch (error) {
     scannerStatus.textContent = `Scanner lookup failed: ${String(error)}`;
@@ -1149,6 +1198,7 @@ async function refreshScanners() {
 }
 
 async function openSettings() {
+  await loadScannerBackendOptions().catch((error) => setStatus(String(error), "error"));
   fillSettingsForm();
   showDialog($("settings-dialog"));
   await refreshScanners();
@@ -1158,9 +1208,11 @@ async function saveSettings(event) {
   event.preventDefault();
   state.settings = {
     scanner: {
+      backend: $("scanner-backend").value,
       device: $("scanner-device").value,
       resolution: Number($("scanner-resolution").value),
-      mode: $("scanner-mode").value
+      mode: $("scanner-mode").value,
+      escl_url: $("escl-url").value.trim()
     },
     paperless_url: $("paperless-url").value.trim(),
     paperless_token: $("paperless-token").value.trim(),
@@ -1243,6 +1295,10 @@ $("preview").addEventListener("pointerup", previewPointerUp);
 $("preview").addEventListener("pointercancel", previewPointerUp);
 $("preview").addEventListener("wheel", previewWheel, { passive: false });
 $("refresh-scanners").addEventListener("click", refreshScanners);
+$("scanner-backend").addEventListener("change", () => {
+  updateScannerBackendForm();
+  void refreshScanners();
+});
 document.querySelectorAll(".close-button").forEach((button) => {
   button.addEventListener("click", () => closeDialog(button.closest(".dialog")));
 });
@@ -1251,6 +1307,7 @@ document.addEventListener("keydown", (event) => {
   const dialogs = [...document.querySelectorAll(".dialog:not([hidden])")];
   const dialog = dialogs.at(-1);
   if (!dialog) return;
+  if (dialog.id === "backend-launch-dialog") return;
   if (dialog.id === "confirm-dialog") closeConfirmDialog();
   else closeDialog(dialog);
 });
@@ -1261,6 +1318,11 @@ $("confirm-form").addEventListener("submit", (event) => {
   const onConfirm = state.confirmation;
   closeConfirmDialog();
   onConfirm?.();
+});
+$("backend-launch-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  state.backendConfirmed = true;
+  closeDialog($("backend-launch-dialog"));
 });
 $("settings-form").addEventListener("submit", saveSettings);
 $("paperless-url").addEventListener("input", updatePaperlessUrlWarning);
@@ -1279,6 +1341,9 @@ $("upload-form").addEventListener("submit", (event) => {
 });
 
 listenForUploadProgress();
+invoke("scanner_backend_status")
+  .then(applyBackendStatus)
+  .catch((error) => setStatus(`Could not determine scanner backend: ${String(error)}`, "error"));
 invoke("load_settings")
   .then((settings) => {
     state.settings = {
@@ -1288,6 +1353,9 @@ invoke("load_settings")
       theme: normalizedTheme(settings.theme)
     };
     applyTheme();
+    void loadScannerBackendOptions()
+      .then(() => applyBackendStatus(selectedBackendOption() || {}))
+      .catch((error) => setStatus(String(error), "error"));
     render();
   })
   .catch((error) => setStatus(String(error), "error"));

@@ -8,6 +8,7 @@
   </head>
   <body>
     <main class="app-shell">
+      <aside id="backend-warning" class="backend-warning" role="alert" hidden></aside>
       <section class="thumbnail-strip" aria-label="Document tabs">
         <div id="document-groups" class="document-groups"></div>
       </section>
@@ -44,6 +45,19 @@
       </div>
     </main>
 
+    <div id="backend-launch-dialog" class="dialog backend-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="backend-launch-title" hidden>
+      <form id="backend-launch-form">
+        <div class="dialog-header">
+          <h2 id="backend-launch-title">Untested scanner backend</h2>
+        </div>
+        <p id="backend-launch-message"></p>
+        <p class="dialog-hint">Scanner behavior may vary by device and operating-system version. Please report problems or contribute fixes.</p>
+        <div class="dialog-actions">
+          <button id="backend-launch-confirm" class="primary-button" type="submit">I understand</button>
+        </div>
+      </form>
+    </div>
+
     <div id="settings-dialog" class="dialog" role="dialog" aria-modal="true" aria-hidden="true" hidden>
       <form id="settings-form">
         <div class="dialog-header">
@@ -52,7 +66,23 @@
         </div>
 
         <label>
-          Scanner
+          Scanner backend
+          <select id="scanner-backend">
+            <option value="auto">Automatic (recommended)</option>
+          </select>
+        </label>
+        <p id="scanner-backend-status" class="scanner-status" role="status"></p>
+
+        <div id="escl-settings" hidden>
+          <label>
+            eSCL scanner URL
+            <input id="escl-url" type="url" placeholder="http://scanner.local" />
+          </label>
+          <p class="dialog-hint">Use the scanner's base HTTP URL. The saved URL is used for eSCL discovery and scans.</p>
+        </div>
+
+        <label>
+          Scanner device
           <select id="scanner-device">
             <option value="">Default scanner</option>
           </select>
@@ -198,6 +228,7 @@
 
     <script src="upload-state.js"></script>
     <script src="document-state.js"></script>
+    <script src="backend-status.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
