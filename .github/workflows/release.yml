@@ -1,4 +1,4 @@
-name: Release Linux packages
+name: Release packages
 
 on:
   push:
@@ -13,15 +13,45 @@ permissions:
   contents: write
 
 jobs:
-  linux:
-    name: Build Debian and Fedora packages
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            artifact: paperless-scanner-linux-x86_64
+            platform: linux
+            runner: ubuntu-22.04
+            bundles: deb,rpm,appimage
+          - name: Linux ARM64
+            artifact: paperless-scanner-linux-arm64
+            platform: linux
+            runner: ubuntu-22.04-arm
+            bundles: deb,appimage
+          - name: Windows x86_64
+            artifact: paperless-scanner-windows-x86_64
+            platform: windows
+            runner: windows-2022
+            bundles: msi,nsis
+          - name: macOS Intel
+            artifact: paperless-scanner-macos-x86_64
+            platform: macos
+            runner: macos-15-intel
+            bundles: dmg
+          - name: macOS Apple Silicon
+            artifact: paperless-scanner-macos-arm64
+            platform: macos
+            runner: macos-15
+            bundles: dmg
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Install Linux build and packaging dependencies
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -44,33 +74,109 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version '^2' --locked
 
-      - name: Build Debian and Fedora packages
-        run: ./scripts/build-packages.sh "${GITHUB_REF_NAME#v}"
+      - name: Build Linux packages
+        if: matrix.platform == 'linux'
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_BUNDLES: ${{ matrix.bundles }}
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: ./scripts/build-packages.sh "${RELEASE_VERSION#v}" "$RELEASE_BUNDLES"
 
-      - name: Validate package artifacts
+      - name: Build Windows packages
+        if: matrix.platform == 'windows'
+        env:
+          RELEASE_BUNDLES: ${{ matrix.bundles }}
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $config = @{ version = $version } | ConvertTo-Json -Compress
+          cargo tauri build --ci --features gui --bundles $env:RELEASE_BUNDLES --config $config
+
+      - name: Build macOS package
+        if: matrix.platform == 'macos'
+        env:
+          RELEASE_BUNDLES: ${{ matrix.bundles }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cargo tauri build --ci --features gui --bundles "$RELEASE_BUNDLES" \
+            --config "{\"version\":\"$version\"}"
+
+      - name: Validate Linux package artifacts
+        if: matrix.platform == 'linux'
+        env:
+          EXPECTED_BUNDLES: ${{ matrix.bundles }}
         run: |
           shopt -s nullglob
-          deb_packages=(target/release/bundle/deb/*.deb)
-          rpm_packages=(target/release/bundle/rpm/*.rpm)
-          test "${#deb_packages[@]}" -eq 1
-          test "${#rpm_packages[@]}" -eq 1
-          dpkg-deb --info "${deb_packages[0]}"
-          rpm --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' -qp "${rpm_packages[0]}"
+          IFS=',' read -r -a bundle_targets <<< "$EXPECTED_BUNDLES"
+          for bundle in "${bundle_targets[@]}"; do
+            case "$bundle" in
+              deb) packages=(target/release/bundle/deb/*.deb) ;;
+              rpm) packages=(target/release/bundle/rpm/*.rpm) ;;
+              appimage) packages=(target/release/bundle/appimage/*.AppImage) ;;
+              *) echo "Unknown Linux bundle: $bundle" >&2; exit 1 ;;
+            esac
+            test "${#packages[@]}" -eq 1
+            test -s "${packages[0]}"
+          done
+          if [[ ",$EXPECTED_BUNDLES," == *,deb,* ]]; then
+            dpkg-deb --info target/release/bundle/deb/*.deb >/dev/null
+          fi
+          if [[ ",$EXPECTED_BUNDLES," == *,rpm,* ]]; then
+            rpm --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' \
+              -qp target/release/bundle/rpm/*.rpm
+          fi
+
+      - name: Validate Windows package artifacts
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $msi = @(Get-ChildItem target/release/bundle/msi/*.msi)
+          $nsis = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
+          if ($msi.Count -ne 1 -or $nsis.Count -ne 1) {
+            throw "Expected one MSI and one NSIS installer"
+          }
+
+      - name: Validate macOS package artifact
+        if: matrix.platform == 'macos'
+        run: test "$(find target/release/bundle/dmg -maxdepth 1 -name '*.dmg' | wc -l)" -eq 1
 
       - name: Upload packages to workflow run
         uses: actions/upload-artifact@v4
         with:
-          name: paperless-scanner-linux-${{ github.ref_name }}
+          name: ${{ matrix.artifact }}
           if-no-files-found: error
-          path: |
-            target/release/bundle/deb/*.deb
-            target/release/bundle/rpm/*.rpm
+          path: target/release/bundle
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: paperless-scanner-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Validate release asset count
+        run: |
+          mapfile -t packages < <(find release-assets -type f \( \
+            -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+            -o -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \
+          \) -print | sort)
+          test "${#packages[@]}" -eq 9
+          printf '%s\n' "${packages[@]}"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          packages=(target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm)
+          mapfile -t packages < <(find release-assets -type f \( \
+            -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+            -o -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \
+          \) -print | sort)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${packages[@]}" --clobber
           else

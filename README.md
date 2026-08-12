@@ -4,15 +4,25 @@
   <p>Scan documents and send them to Paperless-ngx.</p>
 </div>
 
-Paperless Scanner is a small, touch-friendly Linux desktop client for
-SANE-compatible scanners and Paperless-ngx.
+Paperless Scanner is a small, touch-friendly desktop client for scanners and
+Paperless-ngx.
 
 It exists to make ingesting stacks of documents into Paperless-ngx quick and
 painless with a dedicated document scanner.
 
 ## Try it
 
-The current build targets Linux. Windows and macOS support is planned.
+The release builds currently target:
+
+- Linux x86_64: `.deb`, `.rpm`, and `.AppImage`
+- Linux ARM64: `.deb` and `.AppImage`
+- Windows x86_64: `.msi` and NSIS `.exe`
+- macOS Intel: `.dmg`
+- macOS Apple Silicon: `.dmg`
+
+An Android version is a potential future target for compact touchscreen
+devices. It will require a separate Android scanner backend and USB-permission
+integration; it is not supported yet.
 
 Install the system dependencies on Debian or Ubuntu:
 
@@ -45,10 +55,9 @@ credential store.
 
 ## Install a release
 
-Tagged releases publish x86_64 Debian (`.deb`) and Fedora (`.rpm`) packages on
-the [release page](https://github.com/erikgoldenstein/simple-scan-paperless/releases).
-Download both packages from the release assets, then install the one matching
-your distribution:
+Tagged releases publish all of the packages listed above on the
+[release page](https://github.com/erikgoldenstein/simple-scan-paperless/releases).
+Download the package matching your platform from the release assets.
 
 ```sh
 # Debian or Ubuntu
@@ -56,7 +65,14 @@ sudo apt install './Paperless Scanner_<version>_amd64.deb'
 
 # Fedora
 sudo dnf install './Paperless Scanner-<version>-1.x86_64.rpm'
+
+# Linux distributions supporting AppImage
+chmod +x './Paperless Scanner_<version>_amd64.AppImage'
+./'Paperless Scanner_<version>_amd64.AppImage'
 ```
+
+Windows releases include an MSI and an NSIS installer. macOS releases are
+provided separately for Intel and Apple Silicon.
 
 The packages install the desktop launcher and pull in the required Linux
 runtime libraries. SANE still needs to be configured separately; verify that

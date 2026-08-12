@@ -4,7 +4,8 @@
   "scripts": {
     "check": "node --check frontend/app.js",
     "test": "node --test frontend/*.test.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:release": "node scripts/test-release-config.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1"

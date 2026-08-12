@@ -50,6 +50,9 @@ jobs:
       - name: Check frontend JavaScript
         run: npm run check
 
+      - name: Check release configuration
+        run: npm run test:release
+
       - name: Run frontend unit tests
         run: npm test
 

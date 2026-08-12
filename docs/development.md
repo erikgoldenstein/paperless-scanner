@@ -37,11 +37,11 @@ cargo tauri build --features gui --no-bundle
 Build the release packages locally with:
 
 ```sh
-./scripts/build-packages.sh 0.1.0
+./scripts/build-packages.sh 0.1.0 deb,rpm,appimage
 ```
 
-Tagged CI releases build and publish the same Debian and Fedora packages. A
-Linux Nix build is available with:
+Tagged CI releases build and publish Linux, Windows, and macOS packages for
+all supported architectures. A Linux Nix build is available with:
 
 ```sh
 nix build
