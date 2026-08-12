@@ -20,6 +20,10 @@ The release builds currently target:
 - macOS Intel: `.dmg`
 - macOS Apple Silicon: `.dmg`
 
+These targets are available as builds, but only Linux is actively used and
+tested at present. Contributions that fix or improve the other targets are
+welcome.
+
 An Android version is a potential future target for compact touchscreen
 devices. It will require a separate Android scanner backend and USB-permission
 integration; it is not supported yet.
