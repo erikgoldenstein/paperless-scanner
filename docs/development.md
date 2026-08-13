@@ -37,11 +37,12 @@ cargo tauri build --features gui --no-bundle
 Build the release packages locally with:
 
 ```sh
-./scripts/build-packages.sh 0.1.0 deb,rpm,appimage
+./scripts/build-packages.sh 0.1.0 deb,rpm
 ```
 
-Tagged CI releases build and publish Linux, Windows, and macOS packages for
-all supported architectures. A Linux Nix build is available with:
+Tagged CI releases currently build and publish only Linux `.deb` and `.rpm`
+packages. Windows, macOS, Android, and other targets are development-only and
+are not part of the alpha release. A Linux Nix build is available with:
 
 ```sh
 nix build

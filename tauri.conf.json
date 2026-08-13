@@ -24,13 +24,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb", "rpm"],
     "copyright": "Copyright © 2026 Erik Goldenstein",
     "license": "GPL-3.0-or-later",
     "licenseFile": "LICENSE",
     "category": "Utility",
-    "shortDescription": "Touch-friendly scanner client for Paperless-ngx",
-    "longDescription": "Scan, review, create PDFs, and upload documents directly to Paperless-ngx.",
+    "shortDescription": "Alpha touch-friendly scanner client for Paperless-ngx",
+    "longDescription": "Alpha Linux scanner client: scan, review, create PDFs, and upload documents directly to Paperless-ngx.",
     "homepage": "https://github.com/erikgoldenstein/simple-scan-paperless",
     "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
     "linux": {

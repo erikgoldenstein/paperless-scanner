@@ -392,7 +392,10 @@ function updateActionButtons() {
   const hasPages = Boolean(document?.pages?.length);
   const scannerLocked = state.scanning || document?.upload?.state === "active";
   const backendLocked = !state.backendConfirmed;
-  $("add-page").disabled = backendLocked || scannerLocked || !document;
+  $("add-page").disabled = backendLocked || document?.upload?.state === "active" || !document;
+  $("add-page").textContent = state.scanning ? "Cancel scan" : "Add page";
+  $("add-page").classList.toggle("add", !state.scanning);
+  $("add-page").classList.toggle("cancel-scan", state.scanning);
   $("rescan").disabled = backendLocked || scannerLocked || !document || !hasPages;
   $("upload").disabled = backendLocked || state.busy || !document || !hasPages;
   $("reset").disabled = backendLocked || state.busy || !document || !hasPages;
@@ -537,7 +540,7 @@ function renderDocumentGroups(options = {}) {
     const currentBox = currentBoundary.getBoundingClientRect();
     const boundaryLeft = currentBox.left - containerBox.left + container.scrollLeft;
     archiveBoundaryFade.style.left = `${boundaryLeft}px`;
-    archiveHint.style.left = `${boundaryLeft}px`;
+    archiveHint.style.left = `${boundaryLeft - 8}px`;
     const gap = Number.parseFloat(getComputedStyle(container).columnGap || getComputedStyle(container).gap) || 0;
     const leadingMargin = Number.parseFloat(getComputedStyle(currentBoundary).marginLeft) || 0;
     const currentWidth = currentSections.reduce((total, section) => total + section.getBoundingClientRect().width, 0)
@@ -834,19 +837,33 @@ function selectPage(documentId, index) {
 }
 
 async function addPage() {
+  if (state.scanning) {
+    openConfirmDialog(
+      "Cancel scan?",
+      "The current scanner operation will be stopped. You can reconnect the scanner and add a page afterward.",
+      () => { void cancelActiveScan(); },
+      "Cancel scan",
+      "cancel-scan-confirm"
+    );
+    return;
+  }
   jumpToScanDocument();
   await scan(false);
 }
 
-function openConfirmDialog(title, message, onConfirm) {
+function openConfirmDialog(title, message, onConfirm, actionLabel = "Continue", actionClass = "") {
   state.confirmation = onConfirm;
   $("confirm-title").textContent = title;
   $("confirm-message").textContent = message;
+  $("confirm-action").textContent = actionLabel;
+  $("confirm-action").classList.toggle("cancel-scan-confirm", Boolean(actionClass));
   showDialog($("confirm-dialog"));
 }
 
 function closeConfirmDialog() {
   state.confirmation = null;
+  $("confirm-action").textContent = "Continue";
+  $("confirm-action").classList.remove("cancel-scan-confirm");
   closeDialog($("confirm-dialog"));
 }
 
@@ -892,14 +909,32 @@ async function scan(replace) {
     setStatus(`${document.pages.length} page${document.pages.length === 1 ? "" : "s"} ready.`, "success");
     $("scanner-status").textContent = "Scanner ready.";
   } catch (error) {
+    if (scanGeneration !== state.scanGeneration) return;
     const message = String(error);
     recordHistory(document, `Scan failed: ${message}`);
     setStatus(message, "error");
     $("scanner-status").textContent = message;
   } finally {
-    state.scanning = false;
-    updateActionButtons();
+    if (scanGeneration === state.scanGeneration) {
+      state.scanning = false;
+      updateActionButtons();
+    }
   }
+}
+
+async function cancelActiveScan() {
+  if (!state.scanning) return;
+  state.scanGeneration += 1;
+  state.scanning = false;
+  updateActionButtons();
+  $("scanner-status").textContent = "Stopping the previous scan…";
+  try {
+    await invoke("cancel_scan");
+  } catch (error) {
+    console.warn("Could not cancel the previous scan", error);
+  }
+  $("scanner-status").textContent = "Scanner ready.";
+  setStatus("Previous scan canceled. You can add a page now.", "success");
 }
 
 async function cleanup(paths) {
@@ -1171,6 +1206,7 @@ function updatePaperlessUrlWarning() {
 }
 
 async function refreshScanners() {
+  await cancelActiveScan();
   const select = $("scanner-device");
   const refreshButton = $("refresh-scanners");
   const scannerStatus = $("scanner-status");

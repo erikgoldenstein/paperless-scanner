@@ -341,77 +341,43 @@ pub fn default_scanner_device(scanners: &[String]) -> Option<String> {
         .cloned()
 }
 
-fn remove_scan_option(args: &[String], option: &str) -> Vec<String> {
-    args.iter()
-        .filter(|arg| !(*arg == option || arg.starts_with(&format!("{option}="))))
-        .cloned()
-        .collect()
-}
-
-fn unsupported_scan_option(message: &str) -> Option<&'static str> {
-    let option = message
-        .split("unrecognized option '")
-        .nth(1)
-        .and_then(|rest| rest.split('\'').next())?;
-    ["--resolution", "--mode"]
-        .into_iter()
-        .find(|candidate| option == *candidate || option.starts_with(&format!("{candidate}=")))
-}
-
-#[cfg(feature = "gui")]
-fn scanner_probe_args(device: &str) -> Vec<String> {
-    vec![format!("--device-name={device}"), "--dont-scan".to_string()]
-}
-
-#[cfg(feature = "gui")]
-fn run_scanimage_capture(
-    args: &[String],
-    timeout: std::time::Duration,
-    timeout_message: &str,
-) -> Result<std::process::Output, String> {
-    use std::process::{Command, Stdio};
-    use std::thread;
-    use std::time::Instant;
-
-    let mut child = Command::new("scanimage")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Could not run scanimage: {error}"))?;
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        if child
-            .try_wait()
-            .map_err(|error| format!("Could not read scanner state: {error}"))?
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .map_err(|error| format!("Could not read scanner output: {error}"));
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(timeout_message.to_string());
-        }
-        thread::sleep(std::time::Duration::from_millis(50));
+fn resolve_scanner_device(selected: &str, scanners: &[String]) -> Result<String, String> {
+    if let Some(scanner) = scanners.iter().find(|scanner| scanner.as_str() == selected) {
+        return Ok(scanner.clone());
     }
+    if selected.trim().is_empty() {
+        return default_scanner_device(scanners).ok_or_else(|| {
+            "No scanner detected. Reconnect the scanner and try again.".to_string()
+        });
+    }
+
+    let available = scanners
+        .iter()
+        .filter(|scanner| !scanner.starts_with("v4l:"))
+        .collect::<Vec<_>>();
+    if available.len() == 1 {
+        // USB SANE names contain the current bus/device address, which changes
+        // whenever the device is unplugged or reset. With one real scanner it
+        // is safe to use the freshly discovered address.
+        return Ok(available[0].clone());
+    }
+
+    Err("The selected scanner is no longer available. Refresh scanners and try again.".to_string())
 }
 
-#[cfg(feature = "gui")]
-fn preflight_scanner(device: &str) -> Result<(), String> {
-    let output = run_scanimage_capture(
-        &scanner_probe_args(device),
-        std::time::Duration::from_secs(5),
-        "Scanner unavailable or disconnected: scanner did not respond within 5 seconds. Reconnect it and try again.",
-    )?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(scanner_command_error(&output))
-    }
+fn should_refresh_scanner_after_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "device i/o",
+        "no such device",
+        "could not open",
+        "failed to open",
+        "open of device",
+        "not found",
+        "disconnected",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 fn jpeg2000_thread_count() -> i32 {
@@ -426,8 +392,8 @@ pub async fn scan_page(settings: ScanSettings) -> Result<ScanResult, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     tauri::async_runtime::spawn_blocking(move || {
-        let backend = scanner::scanner_backend_for(&settings)?;
         let mut settings = settings;
+        let backend = scanner::scanner_backend_for(&settings)?;
         if settings.device.trim().is_empty() {
             let scanners = backend.list_scanners()?;
             settings.device = default_scanner_device(&scanners).ok_or_else(|| {
@@ -443,7 +409,32 @@ pub async fn scan_page(settings: ScanSettings) -> Result<ScanResult, String> {
             .map_err(|error| format!("Could not create scan filename: {error}"))?
             .as_nanos();
         let path = directory.join(format!("page-{id}.png"));
-        if let Err(error) = backend.scan(&settings, &path) {
+        let scan_error = match backend.scan(&settings, &path) {
+            Ok(()) => None,
+            Err(error) if should_refresh_scanner_after_error(&error) => {
+                let scanners = match backend.list_scanners() {
+                    Ok(scanners) => scanners,
+                    Err(refresh_error) => {
+                        let _ = fs::remove_file(&path);
+                        return Err(format!("{error} (scanner refresh failed: {refresh_error})"));
+                    }
+                };
+                settings.device = match resolve_scanner_device(&settings.device, &scanners) {
+                    Ok(device) => device,
+                    Err(refresh_error) => {
+                        let _ = fs::remove_file(&path);
+                        return Err(format!("{error} ({refresh_error})"));
+                    }
+                };
+                let _ = fs::remove_file(&path);
+                match backend.scan(&settings, &path) {
+                    Ok(()) => None,
+                    Err(retry_error) => Some(retry_error),
+                }
+            }
+            Err(error) => Some(error),
+        };
+        if let Some(error) = scan_error {
             let _ = fs::remove_file(&path);
             return Err(error);
         }
@@ -496,24 +487,6 @@ fn scan_result_from_path(path: PathBuf) -> Result<ScanResult, String> {
         preview: encode_preview(&image, 1600, 82)?,
         thumbnail: encode_preview(&image, 180, 70)?,
     })
-}
-
-#[cfg(feature = "gui")]
-fn finalize_scan_output(path: &Path, output: &std::process::Output) -> Result<ScanResult, String> {
-    use std::fs;
-
-    if !output.status.success() {
-        return Err(scanner_command_error(output));
-    }
-    if fs::metadata(path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0)
-        == 0
-    {
-        return Err("scanimage returned an empty page".to_string());
-    }
-    // scanimage streams stdout directly to `path`; do not write output.stdout here.
-    scan_result_from_path(path.to_path_buf())
 }
 
 #[cfg(feature = "gui")]
@@ -1024,60 +997,6 @@ fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .join("settings.json"))
 }
 
-#[cfg(feature = "gui")]
-fn command_error(command: &str, output: &std::process::Output) -> String {
-    let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if error.is_empty() {
-        format!("{command} failed with status {}", output.status)
-    } else {
-        format!("{command} failed: {error}")
-    }
-}
-
-#[cfg(feature = "gui")]
-fn run_scanimage(args: &[String], output_path: &Path) -> Result<std::process::Output, String> {
-    use std::fs::OpenOptions;
-    use std::process::{Command, Stdio};
-    use std::thread;
-    use std::time::{Duration, Instant};
-
-    let mut output_options = OpenOptions::new();
-    output_options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-
-        output_options.mode(0o600);
-    }
-    let output_file = output_options
-        .open(output_path)
-        .map_err(|error| format!("Could not create scan output: {error}"))?;
-    let mut child = Command::new("scanimage")
-        .args(args)
-        .stdout(Stdio::from(output_file))
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Could not run scanimage: {error}"))?;
-    let deadline = Instant::now() + Duration::from_secs(90);
-    loop {
-        if child
-            .try_wait()
-            .map_err(|error| format!("Could not read scanner state: {error}"))?
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .map_err(|error| format!("Could not read scanner output: {error}"));
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Scanner timed out. Reconnect the scanner and try again.".to_string());
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
 pub fn scanner_error(message: &str) -> String {
     let detail = message.trim();
     let lower = detail.to_ascii_lowercase();
@@ -1099,11 +1018,6 @@ pub fn scanner_error(message: &str) -> String {
     } else {
         format!("scanimage failed: {detail}")
     }
-}
-
-#[cfg(feature = "gui")]
-fn scanner_command_error(output: &std::process::Output) -> String {
-    scanner_error(&String::from_utf8_lossy(&output.stderr))
 }
 
 #[cfg(any(feature = "gui", test))]
@@ -1359,6 +1273,7 @@ fn unique_id() -> u128 {
 #[cfg(feature = "gui")]
 mod commands {
     use super::{AppSettings, ScanResult, ScanSettings, ScannerBackendStatus};
+    use crate::scanner;
     use tauri::AppHandle;
 
     #[tauri::command]
@@ -1379,6 +1294,11 @@ mod commands {
     #[tauri::command]
     pub async fn scan_page(settings: ScanSettings) -> Result<ScanResult, String> {
         super::scan_page(settings).await
+    }
+
+    #[tauri::command]
+    pub fn cancel_scan() -> bool {
+        scanner::cancel_active_scan()
     }
 
     #[tauri::command]
@@ -1431,6 +1351,7 @@ pub fn run() {
             commands::scanner_backend_status,
             commands::scanner_backend_options,
             commands::scan_page,
+            commands::cancel_scan,
             commands::restore_pages,
             commands::cleanup_pages,
             commands::load_settings,
@@ -1439,13 +1360,10 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Paperless Scanner")
-        .run(|_, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
-                if let Err(error) = cleanup_all_pages() {
-                    eprintln!("Could not clean up temporary scan files: {error}");
-                }
-            }
-        });
+        // Keep unuploaded page files so a normal close, crash, or forced
+        // termination can be resumed on the next launch. Uploaded/reset
+        // pages are removed at the point they are successfully handled.
+        .run(|_, _| {});
 }
 
 #[cfg(test)]
@@ -1575,27 +1493,35 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_scan_option_can_be_removed_without_dropping_other_options() {
-        let settings = ScanSettings::default();
-        let args = scanimage_args(&settings);
-        let filtered = remove_scan_option(&args, "--resolution");
+    fn scanner_scan_resolves_a_reenumerated_usb_device() {
+        let current = vec!["epsonds:libusb:001:042".to_string()];
 
-        assert!(!filtered.iter().any(|arg| arg.starts_with("--resolution")));
-        assert!(filtered.iter().any(|arg| arg == "--format=png"));
-        assert!(filtered.iter().any(|arg| arg == "--mode=Color"));
+        assert_eq!(
+            resolve_scanner_device("epsonds:libusb:001:041", &current),
+            Ok("epsonds:libusb:001:042".to_string())
+        );
     }
 
     #[test]
-    fn scanner_errors_identify_unsupported_options() {
+    fn scanner_scan_keeps_an_available_device_selection() {
+        let current = vec!["epsonds:libusb:001:042".to_string()];
+
         assert_eq!(
-            unsupported_scan_option("scanimage: unrecognized option '--resolution'"),
-            Some("--resolution")
+            resolve_scanner_device("epsonds:libusb:001:042", &current),
+            Ok("epsonds:libusb:001:042".to_string())
         );
-        assert_eq!(
-            unsupported_scan_option("scanimage: unrecognized option '--resolution=300'"),
-            Some("--resolution")
-        );
-        assert_eq!(unsupported_scan_option("scanimage failed"), None);
+    }
+
+    #[test]
+    fn scanner_scan_rejects_a_stale_selection_when_multiple_devices_exist() {
+        let current = vec![
+            "epsonds:libusb:001:042".to_string(),
+            "epsonds:libusb:001:043".to_string(),
+        ];
+
+        let error = resolve_scanner_device("epsonds:libusb:001:041", &current).unwrap_err();
+
+        assert!(error.contains("selected scanner is no longer available"));
     }
 
     #[test]
@@ -1725,17 +1651,14 @@ mod tests {
         assert!(scanner_error("Device is busy").starts_with("Scanner is busy"));
     }
 
-    #[cfg(feature = "gui")]
     #[test]
-    fn scanner_probe_does_not_use_slow_scan_options() {
-        let args = scanner_probe_args("epsonds:libusb:001:024");
-
-        assert_eq!(
-            args,
-            vec!["--device-name=epsonds:libusb:001:024", "--dont-scan"]
-        );
-        assert!(!args.iter().any(|arg| arg.starts_with("--resolution")));
-        assert!(!args.iter().any(|arg| arg.starts_with("--mode")));
+    fn scanner_refresh_is_reserved_for_device_errors() {
+        assert!(should_refresh_scanner_after_error(
+            "Scanner unavailable or disconnected: sane_get_parameters: Error during device I/O"
+        ));
+        assert!(!should_refresh_scanner_after_error(
+            "scanimage failed: invalid resolution"
+        ));
     }
 
     #[cfg(feature = "gui")]
@@ -1754,18 +1677,18 @@ mod tests {
 
     #[cfg(feature = "gui")]
     #[test]
-    fn streamed_scan_output_is_not_overwritten_by_empty_stdout() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("page-streamed.png");
-        image::RgbImage::from_pixel(20, 30, image::Rgb([255, 255, 255]))
+    fn restoring_pages_keeps_valid_unuploaded_pages_for_resume() {
+        let path = page_directory()
+            .unwrap()
+            .join(format!("page-resume-test-{}.png", unique_id()));
+        image::RgbImage::from_pixel(8, 8, image::Rgb([255, 255, 255]))
             .save(&path)
             .unwrap();
-        let output = std::process::Command::new("true").output().unwrap();
 
-        finalize_scan_output(&path, &output).unwrap();
+        let pages = restore_pages().unwrap();
 
-        let result = scan_result_from_path(path).unwrap();
-        assert!(result.preview.starts_with("data:image/jpeg;base64,"));
+        assert!(pages.iter().any(|page| page.path == path.to_string_lossy()));
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

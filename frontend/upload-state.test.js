@@ -52,3 +52,11 @@ test("the app keeps the upload progress UI in the embedded frontend", () => {
   assert.match(html, /upload-state\.js[\s\S]*app\.js/);
   assert.doesNotMatch(html, /<dialog\b/);
 });
+
+test("canceling an active scan is routed through the confirmation modal", () => {
+  const app = fs.readFileSync(`${__dirname}/app.js`, "utf8");
+
+  assert.match(app, /if \(state\.scanning\) \{[\s\S]*openConfirmDialog\(/);
+  assert.match(app, /"Cancel scan\?"/);
+  assert.match(app, /"cancel-scan-confirm"/);
+});

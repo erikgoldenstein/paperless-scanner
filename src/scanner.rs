@@ -1,11 +1,40 @@
 //! Scanner backends.  The application talks to this trait instead of making
 //! assumptions about the scanner API provided by the host operating system.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "linux")]
+use std::process::Child;
+#[cfg(target_os = "linux")]
+use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 
 use crate::ScanSettings;
+
+#[cfg(target_os = "linux")]
+static ACTIVE_SCANIMAGE: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn active_scanimage() -> &'static Mutex<Option<Child>> {
+    ACTIVE_SCANIMAGE.get_or_init(|| Mutex::new(None))
+}
+
+/// Stop the external scanner process, if one is currently running.
+pub fn cancel_active_scan() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let mut active = active_scanimage()
+            .lock()
+            .expect("scan process mutex poisoned");
+        if let Some(mut child) = active.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return true;
+        }
+    }
+    false
+}
 
 pub trait ScannerBackend: Send + Sync {
     fn id(&self) -> &'static str;
@@ -92,6 +121,8 @@ pub fn scanner_backend_for(settings: &ScanSettings) -> Result<Box<dyn ScannerBac
             escl,
         })),
         "escl" => Ok(Box::new(escl)),
+        #[cfg(target_os = "linux")]
+        "sane-legacy" => Ok(Box::new(LegacySaneBackend::new())),
         selected if selected == native_id => Ok(Box::new(native)),
         _ => Err(format!(
             "Scanner backend '{}' is not available on this platform",
@@ -106,11 +137,13 @@ pub fn scanner_backend_options() -> Vec<ScannerBackendStatus> {
     let mut automatic = native_status.clone();
     automatic.id = "auto".to_string();
     automatic.name = format!("Automatic ({})", native.name());
-    vec![
-        automatic,
-        native_status,
-        ScannerBackendStatus::from_backend(&EsclBackend::new(String::new())),
-    ]
+    let mut options = vec![automatic, native_status];
+    #[cfg(target_os = "linux")]
+    options.push(ScannerBackendStatus::from_backend(&LegacySaneBackend::new()));
+    options.extend([ScannerBackendStatus::from_backend(&EsclBackend::new(
+        String::new(),
+    ))]);
+    options
 }
 
 pub fn scanner_backend_status() -> ScannerBackendStatus {
@@ -121,7 +154,7 @@ pub fn scanner_backend_status() -> ScannerBackendStatus {
 
 #[cfg(target_os = "linux")]
 fn native_backend() -> SaneBackend {
-    SaneBackend
+    SaneBackend::new()
 }
 
 #[cfg(target_os = "windows")]
@@ -140,184 +173,115 @@ fn native_backend() -> UnsupportedBackend {
 }
 
 #[cfg(target_os = "linux")]
-struct SaneBackend;
-
-#[cfg(target_os = "linux")]
-mod sane_sys {
-    use std::ffi::{c_char, c_int, c_void};
-
-    pub type Status = c_int;
-    pub type Handle = *mut c_void;
-
-    pub const GOOD: Status = 0;
-    pub const EOF: Status = 5;
-    pub const ACTION_SET_VALUE: c_int = 1;
-    pub const FRAME_GRAY: c_int = 0;
-    pub const FRAME_RGB: c_int = 1;
-
-    #[repr(C)]
-    pub struct Device {
-        pub name: *const c_char,
-        pub vendor: *const c_char,
-        pub model: *const c_char,
-        pub type_: *const c_char,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct Parameters {
-        pub format: c_int,
-        pub last_frame: c_int,
-        pub bytes_per_line: c_int,
-        pub pixels_per_line: c_int,
-        pub lines: c_int,
-        pub depth: c_int,
-    }
-
-    #[repr(C)]
-    pub struct Range {
-        pub min: c_int,
-        pub max: c_int,
-        pub quant: c_int,
-    }
-
-    #[repr(C)]
-    pub union Constraint {
-        pub range: *const Range,
-        pub word_list: *const c_int,
-        pub string_list: *const *const c_char,
-    }
-
-    #[repr(C)]
-    pub struct OptionDescriptor {
-        pub name: *const c_char,
-        pub title: *const c_char,
-        pub desc: *const c_char,
-        pub type_: c_int,
-        pub unit: c_int,
-        pub size: c_int,
-        pub cap: c_int,
-        pub constraint_type: c_int,
-        pub constraint: Constraint,
-    }
-
-    #[link(name = "sane")]
-    unsafe extern "C" {
-        pub fn sane_init(version_code: *mut c_int, authorize: *mut c_void) -> Status;
-        pub fn sane_exit();
-        pub fn sane_strstatus(status: Status) -> *const c_char;
-        pub fn sane_get_devices(
-            device_list: *mut *const *const Device,
-            local_only: c_int,
-        ) -> Status;
-        pub fn sane_open(name: *const c_char, handle: *mut Handle) -> Status;
-        pub fn sane_close(handle: Handle);
-        pub fn sane_cancel(handle: Handle);
-        pub fn sane_get_option_descriptor(handle: Handle, option: c_int)
-            -> *const OptionDescriptor;
-        pub fn sane_control_option(
-            handle: Handle,
-            option: c_int,
-            action: c_int,
-            value: *mut c_void,
-            info: *mut c_int,
-        ) -> Status;
-        pub fn sane_start(handle: Handle) -> Status;
-        pub fn sane_get_parameters(handle: Handle, parameters: *mut Parameters) -> Status;
-        pub fn sane_read(
-            handle: Handle,
-            data: *mut u8,
-            max_length: c_int,
-            length: *mut c_int,
-        ) -> Status;
-    }
+struct SaneBackend {
+    scanimage: PathBuf,
 }
 
 #[cfg(target_os = "linux")]
-fn sane_error(status: sane_sys::Status) -> String {
-    unsafe {
-        std::ffi::CStr::from_ptr(sane_sys::sane_strstatus(status))
-            .to_string_lossy()
-            .into_owned()
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct SaneSession;
-
-#[cfg(target_os = "linux")]
-impl Drop for SaneSession {
-    fn drop(&mut self) {
-        unsafe { sane_sys::sane_exit() }
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct SaneHandle(sane_sys::Handle);
-
-#[cfg(target_os = "linux")]
-impl Drop for SaneHandle {
-    fn drop(&mut self) {
-        unsafe {
-            sane_sys::sane_cancel(self.0);
-            sane_sys::sane_close(self.0);
+impl SaneBackend {
+    fn new() -> Self {
+        Self {
+            scanimage: PathBuf::from("scanimage"),
         }
     }
-}
 
-#[cfg(target_os = "linux")]
-fn sane_init() -> Result<SaneSession, String> {
-    let mut version = (1 << 24) | (0 << 16);
-    let status = unsafe { sane_sys::sane_init(&mut version, std::ptr::null_mut()) };
-    if status == sane_sys::GOOD {
-        Ok(SaneSession)
-    } else {
-        Err(format!("Could not initialize SANE: {}", sane_error(status)))
+    #[cfg(test)]
+    fn with_scanimage(scanimage: PathBuf) -> Self {
+        Self { scanimage }
     }
-}
 
-#[cfg(target_os = "linux")]
-fn sane_devices() -> Result<Vec<String>, String> {
-    let _session = sane_init()?;
-    let mut devices = std::ptr::null();
-    let status = unsafe { sane_sys::sane_get_devices(&mut devices, 0) };
-    if status != sane_sys::GOOD {
-        return Err(format!(
-            "Could not enumerate SANE scanners: {}",
-            sane_error(status)
-        ));
-    }
-    let mut result = Vec::new();
-    let mut index = 0;
-    unsafe {
-        while !(*devices.add(index)).is_null() {
-            let device = &**devices.add(index);
-            let name = std::ffi::CStr::from_ptr(device.name)
-                .to_string_lossy()
-                .into_owned();
-            if !name.starts_with("v4l:") && !result.contains(&name) {
-                result.push(name);
+    fn run_scanimage(
+        &self,
+        args: &[String],
+        output_path: Option<&Path>,
+    ) -> Result<std::process::Output, String> {
+        use std::fs::OpenOptions;
+        use std::process::{Command, Stdio};
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let stdout = if let Some(path) = output_path {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+
+                options.mode(0o600);
             }
-            index += 1;
-        }
-    }
-    Ok(result)
-}
+            let file = options
+                .open(path)
+                .map_err(|error| format!("Could not create scan output: {error}"))?;
+            Stdio::from(file)
+        } else {
+            Stdio::piped()
+        };
 
-#[cfg(target_os = "linux")]
-fn sane_option(handle: sane_sys::Handle, name: &str) -> Option<i32> {
-    let requested = std::ffi::CString::new(name).ok()?;
-    for index in 1..256 {
-        let descriptor = unsafe { sane_sys::sane_get_option_descriptor(handle, index) };
-        if descriptor.is_null() {
-            continue;
+        let mut child = Command::new(&self.scanimage)
+            .args(args)
+            .stdout(stdout)
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("Could not run scanimage: {error}"))?;
+        {
+            let mut active = active_scanimage()
+                .lock()
+                .map_err(|_| "Scanner process state is unavailable".to_string())?;
+            if active.is_some() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Another scanner operation is already active".to_string());
+            }
+            *active = Some(child);
         }
-        let descriptor_name = unsafe { std::ffi::CStr::from_ptr((*descriptor).name) };
-        if descriptor_name == requested.as_c_str() {
-            return Some(index);
+        let deadline = Instant::now() + Duration::from_secs(90);
+
+        loop {
+            let finished = {
+                let mut active = active_scanimage()
+                    .lock()
+                    .map_err(|_| "Scanner process state is unavailable".to_string())?;
+                match active.as_mut() {
+                    Some(child) => child
+                        .try_wait()
+                        .map_err(|error| format!("Could not read scanner state: {error}"))?
+                        .is_some(),
+                    None => return Err("Scanner scan canceled".to_string()),
+                }
+            };
+            if finished {
+                let child = active_scanimage()
+                    .lock()
+                    .map_err(|_| "Scanner process state is unavailable".to_string())?
+                    .take()
+                    .ok_or_else(|| "Scanner scan canceled".to_string())?;
+                return child
+                    .wait_with_output()
+                    .map_err(|error| format!("Could not read scanner output: {error}"));
+            }
+            if Instant::now() >= deadline {
+                let child = active_scanimage()
+                    .lock()
+                    .map_err(|_| "Scanner process state is unavailable".to_string())?
+                    .take();
+                if let Some(mut child) = child {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                return Err("Scanner timed out. Reconnect the scanner and try again.".to_string());
+            }
+            thread::sleep(Duration::from_millis(100));
         }
     }
-    None
+
+    fn command_error(output: &std::process::Output) -> String {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        if detail.trim().is_empty() {
+            crate::scanner_error(&format!("scanimage exited with status {}", output.status))
+        } else {
+            crate::scanner_error(&detail)
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -335,143 +299,138 @@ impl ScannerBackend for SaneBackend {
     }
 
     fn list_scanners(&self) -> Result<Vec<String>, String> {
-        sane_devices()
+        let output = self.run_scanimage(&["-L".to_string()], None)?;
+        if !output.status.success() {
+            return Err(Self::command_error(&output));
+        }
+        Ok(
+            crate::parse_scanner_list(&String::from_utf8_lossy(&output.stdout))
+                .into_iter()
+                .filter(|name| !name.starts_with("v4l:"))
+                .collect(),
+        )
     }
 
     fn scan(&self, settings: &ScanSettings, output: &Path) -> Result<(), String> {
-        use image::{DynamicImage, ImageBuffer, Luma, Rgb};
-        use std::ffi::{c_void, CString};
-
-        let device_name = if settings.device.trim().is_empty() {
-            sane_devices()?.into_iter().next().ok_or_else(|| {
-                "No scanner detected. Reconnect the scanner and try again.".to_string()
-            })?
+        let args = crate::scanimage_args(settings);
+        let result = self.run_scanimage(&args, Some(output))?;
+        if result.status.success() {
+            Ok(())
         } else {
-            settings.device.clone()
-        };
-        let _session = sane_init()?;
-        let device_name = CString::new(device_name)
-            .map_err(|_| "Scanner name contains an invalid character".to_string())?;
-        let mut raw_handle = std::ptr::null_mut();
-        let status = unsafe { sane_sys::sane_open(device_name.as_ptr(), &mut raw_handle) };
-        if status != sane_sys::GOOD {
-            return Err(format!("Could not open scanner: {}", sane_error(status)));
+            let _ = std::fs::remove_file(output);
+            Err(Self::command_error(&result))
         }
-        let handle = SaneHandle(raw_handle);
-        if let Some(option_index) = sane_option(handle.0, "resolution") {
-            let mut value = settings.resolution as i32;
-            let status = unsafe {
-                sane_sys::sane_control_option(
-                    handle.0,
-                    option_index,
-                    sane_sys::ACTION_SET_VALUE,
-                    (&mut value as *mut i32).cast::<c_void>(),
-                    std::ptr::null_mut(),
-                )
-            };
-            if status != sane_sys::GOOD {
-                return Err(format!(
-                    "Could not set scanner resolution: {}",
-                    sane_error(status)
-                ));
-            }
-        }
-        if let Some(option_index) = sane_option(handle.0, "mode") {
-            let mode = CString::new(settings.mode.clone())
-                .map_err(|_| "Scanner mode contains an invalid character".to_string())?;
-            let status = unsafe {
-                sane_sys::sane_control_option(
-                    handle.0,
-                    option_index,
-                    sane_sys::ACTION_SET_VALUE,
-                    mode.as_ptr() as *mut c_void,
-                    std::ptr::null_mut(),
-                )
-            };
-            if status != sane_sys::GOOD {
-                return Err(format!(
-                    "Could not set scanner mode: {}",
-                    sane_error(status)
-                ));
-            }
-        }
-        let mut parameters = sane_sys::Parameters {
-            format: 0,
-            last_frame: 0,
-            bytes_per_line: 0,
-            pixels_per_line: 0,
-            lines: 0,
-            depth: 0,
-        };
-        let status = unsafe { sane_sys::sane_start(handle.0) };
-        if status != sane_sys::GOOD {
-            return Err(format!("Could not start scan: {}", sane_error(status)));
-        }
-        let status = unsafe { sane_sys::sane_get_parameters(handle.0, &mut parameters) };
-        if status != sane_sys::GOOD {
-            return Err(format!(
-                "Could not read scan parameters: {}",
-                sane_error(status)
-            ));
-        }
-        if parameters.depth != 8 {
-            return Err(format!(
-                "This SANE scanner returned {}-bit data; only 8-bit scans are currently supported",
-                parameters.depth
-            ));
-        }
-        let mut bytes = Vec::new();
-        let mut buffer = vec![0u8; 1024 * 1024];
-        loop {
-            let mut read = 0;
-            let status = unsafe {
-                sane_sys::sane_read(
-                    handle.0,
-                    buffer.as_mut_ptr(),
-                    buffer.len() as i32,
-                    &mut read,
-                )
-            };
-            if status == sane_sys::EOF {
-                break;
-            }
-            if status != sane_sys::GOOD {
-                return Err(format!("Could not read scan data: {}", sane_error(status)));
-            }
-            if read > 0 {
-                bytes.extend_from_slice(&buffer[..read as usize]);
-            }
-        }
-        let width = parameters.pixels_per_line as u32;
-        let height = parameters.lines as u32;
-        let row_bytes = parameters.bytes_per_line as usize;
-        let channels = match parameters.format {
-            sane_sys::FRAME_GRAY => 1,
-            sane_sys::FRAME_RGB => 3,
-            format => return Err(format!("Unsupported SANE frame format: {format}")),
-        };
-        let expected_row_bytes = width as usize * channels;
-        if row_bytes < expected_row_bytes || bytes.len() < row_bytes * height as usize {
-            return Err("SANE returned incomplete image data".to_string());
-        }
-        let mut pixels = Vec::with_capacity(expected_row_bytes * height as usize);
-        for row in bytes.chunks(row_bytes).take(height as usize) {
-            pixels.extend_from_slice(&row[..expected_row_bytes]);
-        }
-        let image = match channels {
-            1 => DynamicImage::ImageLuma8(
-                ImageBuffer::<Luma<u8>, _>::from_raw(width, height, pixels)
-                    .ok_or_else(|| "Could not construct grayscale scan image".to_string())?,
-            ),
-            _ => DynamicImage::ImageRgb8(
-                ImageBuffer::<Rgb<u8>, _>::from_raw(width, height, pixels)
-                    .ok_or_else(|| "Could not construct color scan image".to_string())?,
-            ),
-        };
-        image
-            .save(output)
-            .map_err(|error| format!("Could not save scan output: {error}"))
     }
+}
+
+#[cfg(target_os = "linux")]
+struct LegacySaneBackend {
+    command: SaneBackend,
+}
+
+#[cfg(target_os = "linux")]
+impl LegacySaneBackend {
+    fn new() -> Self {
+        Self {
+            command: SaneBackend::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_scanimage(scanimage: PathBuf) -> Self {
+        Self {
+            command: SaneBackend::with_scanimage(scanimage),
+        }
+    }
+
+    fn list_scanners(&self) -> Result<Vec<String>, String> {
+        let output = self.command.run_scanimage(&["-L".to_string()], None)?;
+        if !output.status.success() {
+            return Err(SaneBackend::command_error(&output));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Ok(crate::parse_scanner_list(&format!("{stdout}\n{stderr}")))
+    }
+
+    fn scan(&self, settings: &ScanSettings, output: &Path) -> Result<(), String> {
+        let probe = vec![
+            format!("--device-name={}", settings.device),
+            "--dont-scan".to_string(),
+        ];
+        let probe_result = self.command.run_scanimage(&probe, None)?;
+        if !probe_result.status.success() {
+            return Err(SaneBackend::command_error(&probe_result));
+        }
+
+        let mut args = crate::scanimage_args(settings);
+        let mut skipped_options = Vec::new();
+        loop {
+            let result = match self.command.run_scanimage(&args, Some(output)) {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = std::fs::remove_file(output);
+                    return Err(error);
+                }
+            };
+            if result.status.success() {
+                return Ok(());
+            }
+            if let Some(option) = unsupported_scan_option(&String::from_utf8_lossy(&result.stderr))
+            {
+                if !skipped_options.contains(&option) {
+                    args = remove_scan_option(&args, option);
+                    skipped_options.push(option);
+                    let _ = std::fs::remove_file(output);
+                    continue;
+                }
+            }
+            let _ = std::fs::remove_file(output);
+            return Err(SaneBackend::command_error(&result));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ScannerBackend for LegacySaneBackend {
+    fn id(&self) -> &'static str {
+        "sane-legacy"
+    }
+
+    fn name(&self) -> &'static str {
+        "Linux SANE (legacy external scanimage)"
+    }
+
+    fn experimental(&self) -> bool {
+        false
+    }
+
+    fn list_scanners(&self) -> Result<Vec<String>, String> {
+        self.list_scanners()
+    }
+
+    fn scan(&self, settings: &ScanSettings, output: &Path) -> Result<(), String> {
+        self.scan(settings, output)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn remove_scan_option(args: &[String], option: &str) -> Vec<String> {
+    args.iter()
+        .filter(|arg| !(*arg == option || arg.starts_with(&format!("{option}="))))
+        .cloned()
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn unsupported_scan_option(message: &str) -> Option<&'static str> {
+    let option = message
+        .split("unrecognized option '")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())?;
+    ["--resolution", "--mode"]
+        .into_iter()
+        .find(|candidate| option == *candidate || option.starts_with(&format!("{candidate}=")))
 }
 
 #[cfg(target_os = "windows")]
@@ -699,6 +658,25 @@ fn command_output_error(command: &str, output: &std::process::Output) -> String 
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    fn fake_scanimage(script: &str) -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("scanimage");
+        std::fs::write(&path, script).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        (directory, path)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_scan_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     #[test]
     fn experimental_status_has_the_user_facing_warning() {
         let status = ScannerBackendStatus {
@@ -739,5 +717,106 @@ mod tests {
                 .unwrap()
                 .experimental
         );
+        #[cfg(target_os = "linux")]
+        assert!(ids.contains(&"sane-legacy"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sane_listing_runs_in_a_child_process_and_parses_devices() {
+        let _lock = test_scan_lock().lock().unwrap();
+        let (_directory, command) = fake_scanimage(
+            r##"#!/bin/sh
+if [ "$1" = "-L" ]; then
+  cat <<'EOF'
+device `scanner:test' is a test scanner
+device `v4l:/dev/video0' is a camera
+device `scanner:test' is a duplicate
+EOF
+  exit 0
+fi
+exit 1
+"##,
+        );
+        let backend = SaneBackend::with_scanimage(command);
+
+        assert_eq!(
+            backend.list_scanners().unwrap(),
+            vec!["scanner:test".to_string()]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_crashing_sane_child_becomes_an_error_instead_of_crashing_the_app() {
+        let _lock = test_scan_lock().lock().unwrap();
+        let (_directory, command) = fake_scanimage("#!/bin/sh\nulimit -c 0\nkill -SEGV $$\n");
+        let backend = SaneBackend::with_scanimage(command);
+
+        let error = backend.list_scanners().unwrap_err();
+
+        assert!(error.contains("scanimage"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_active_sane_child_can_be_cancelled_without_waiting_for_the_timeout() {
+        let _lock = test_scan_lock().lock().unwrap();
+        let (_directory, command) = fake_scanimage("#!/bin/sh\nsleep 30\n");
+        let backend = SaneBackend::with_scanimage(command);
+        let worker = std::thread::spawn(move || backend.list_scanners());
+
+        for _ in 0..100 {
+            if active_scanimage().lock().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(cancel_active_scan());
+        let error = worker.join().unwrap().unwrap_err();
+
+        assert!(error.contains("canceled"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn legacy_sane_runs_the_old_preflight_and_retries_without_unsupported_options() {
+        let _lock = test_scan_lock().lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let log = directory.path().join("calls.log");
+        let script = format!(
+            "#!/bin/sh\nlog={}\necho \"$*\" >> \"$log\"\nif [ \"$1\" = \"--device-name=scanner:test\" ] && [ \"$2\" = \"--dont-scan\" ]; then\n  exit 0\nfi\ncase \"$*\" in\n  *\"--resolution=300\"*)\n    echo \"scanimage: unrecognized option '--resolution=300'\" >&2\n    exit 1\n    ;;\nesac\nexit 0\n",
+            log.display()
+        );
+        let (_command_directory, command) = fake_scanimage(&script);
+        let backend = LegacySaneBackend::with_scanimage(command);
+        let output = directory.path().join("page.png");
+        let settings = crate::ScanSettings {
+            device: "scanner:test".to_string(),
+            resolution: 300,
+            ..Default::default()
+        };
+
+        backend.scan(&settings, &output).unwrap();
+
+        let calls = std::fs::read_to_string(log).unwrap();
+        let calls = calls.lines().collect::<Vec<_>>();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0], "--device-name=scanner:test --dont-scan");
+        assert!(calls[1].contains("--resolution=300"));
+        assert!(!calls[2].contains("--resolution"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn legacy_sane_is_selectable_as_a_separate_backend() {
+        let settings = crate::ScanSettings {
+            backend: "sane-legacy".to_string(),
+            ..Default::default()
+        };
+
+        let backend = scanner_backend_for(&settings).unwrap();
+
+        assert_eq!(backend.id(), "sane-legacy");
     }
 }

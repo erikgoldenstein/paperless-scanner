@@ -70,6 +70,8 @@ button { cursor: pointer; }
 }
 
 .backend-warning {
+  grid-column: 1;
+  grid-row: 1;
   padding: 10px 14px;
   border: 1px solid #d08a22;
   border-radius: 10px;
@@ -80,6 +82,8 @@ button { cursor: pointer; }
 }
 
 .workspace {
+  grid-column: 1;
+  grid-row: 3;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
@@ -94,7 +98,7 @@ button { cursor: pointer; }
   min-height: 0;
 }
 
-.thumbnail-strip { overflow: hidden; padding: 6px; }
+.thumbnail-strip { grid-column: 1; grid-row: 2; overflow: hidden; padding: 6px; }
 .document-groups { position: relative; height: 100%; display: flex; align-items: stretch; gap: 10px; padding: 2px; overflow-x: auto; scroll-behavior: smooth; overscroll-behavior-inline: contain; touch-action: pan-x; }
 .archive-spacer { flex: 0 0 auto; pointer-events: none; }
 .document-group { position: relative; z-index: 1; flex: 0 0 min(420px, 46vw); min-width: 230px; display: grid; grid-template-rows: auto 1fr; border: 2px solid var(--border); border-radius: 9px; background: var(--surface); overflow: hidden; }
@@ -140,11 +144,11 @@ button { cursor: pointer; }
   color: #267d49;
   font-size: .62rem;
   font-weight: 700;
-  letter-spacing: .04em;
+  letter-spacing: .12em;
   line-height: 1;
   text-transform: lowercase;
   white-space: nowrap;
-  transform: translate(-50%, -50%) rotate(-90deg);
+  transform: translate(-100%, -50%) rotate(-90deg);
 }
 .document-group-header { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 3px 8px; border-bottom: 1px solid var(--border); }
 .document-tab { border: 0; border-radius: 5px; background: transparent; color: var(--text); font-weight: 700; padding: 4px 6px; }
@@ -214,6 +218,7 @@ button { cursor: pointer; }
 .action { min-height: 0; padding: 18px 10px; border: 0; border-radius: 10px; color: white; font-weight: 700; font-size: 1.35rem; box-shadow: 0 2px 4px #0002; }
 .action:disabled { opacity: .5; cursor: wait; }
 .add { background: #2f9e5b; }
+.action.cancel-scan, .primary-button.cancel-scan-confirm { background: #d6a11a; color: #20242a; }
 .rescan { background: #e88927; }
 .upload { background: #3277d3; }
 .reset { background: #cf3e3e; }
