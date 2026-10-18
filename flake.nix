@@ -23,6 +23,14 @@
             sane-backends
             webkitgtk_4_1
           ];
+          desktopItem = pkgs.makeDesktopItem {
+            name = "paperless-scanner";
+            desktopName = "Paperless Scanner";
+            comment = "Scan documents and send them to Paperless-ngx";
+            exec = "paperless-scanner";
+            icon = "paperless-scanner";
+            categories = [ "Office" "Scanning" ];
+          };
         in {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "paperless-scanner";
@@ -30,11 +38,19 @@
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [ "--features" "gui" ];
-            nativeBuildInputs = with pkgs; [ pkg-config ];
+            # cmake is only needed by a crate build script, not as the build system.
+            nativeBuildInputs = with pkgs; [ pkg-config cmake ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ wrapGAppsHook3 ];
+            dontUseCmakeConfigure = true;
             buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux linuxInputs;
             doCheck = false;
+            # cargoBuildHook writes to target/<triple>/release.
             installPhase = ''
-              install -Dm755 target/release/paperless-scanner $out/bin/paperless-scanner
+              runHook preInstall
+              install -Dm755 target/*/release/paperless-scanner $out/bin/paperless-scanner
+              install -Dm644 icons/icon.svg $out/share/icons/hicolor/scalable/apps/paperless-scanner.svg
+              install -Dm644 ${desktopItem}/share/applications/* -t $out/share/applications
+              runHook postInstall
             '';
           };
         });
@@ -54,6 +70,7 @@
             packages = with pkgs; [
               cargo
               clippy
+              cmake
               nodejs_22
               python3
               rustc
